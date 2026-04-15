@@ -176,7 +176,11 @@ io.on("connection", (socket) => {
   socket.on("message:send", (data) => {
     const { roomId, message, senderCid, senderNickname } = data;
 
+    console.log("[Server] Received message:send event");
+    console.log("[Server] Data:", { roomId, message: message?.substring(0, 50), senderCid, senderNickname });
+
     if (!roomId || !message || !senderCid) {
+      console.error("[Server] Invalid message data - rejecting");
       socket.emit("message:error", {
         message: "Invalid message data",
       });
@@ -185,6 +189,7 @@ io.on("connection", (socket) => {
 
     const chatRoom = chatRooms.get(roomId);
     if (!chatRoom) {
+      console.error("[Server] Chat room not found:", roomId);
       socket.emit("message:error", {
         message: "Chat room not found",
       });
@@ -206,6 +211,9 @@ io.on("connection", (socket) => {
     // Store message
     chatRoom.messages.push(messageObj);
 
+    console.log(`[Server] Broadcasting message:received to room: ${roomId}`);
+    console.log(`[Server] Message ID: ${messageObj.id}`);
+    
     // Broadcast to room
     io.to(roomId).emit("message:received", messageObj);
 
@@ -218,8 +226,11 @@ io.on("connection", (socket) => {
   socket.on("room:getHistory", (data) => {
     const { roomId } = data;
 
+    console.log(`[Server] Received room:getHistory for ${roomId}`);
+
     const chatRoom = chatRooms.get(roomId);
     if (!chatRoom) {
+      console.error("[Server] Chat room not found:", roomId);
       socket.emit("room:error", {
         message: "Chat room not found",
       });
@@ -230,6 +241,43 @@ io.on("connection", (socket) => {
       roomId,
       messages: chatRoom.messages,
     });
+  });
+
+  // ─── Join Room (for users entering chat) ────────────
+  socket.on("room:join", (data) => {
+    const { roomId } = data;
+    const userCid = userSockets.get(socket.id);
+
+    console.log(`[Server] room:join event received from socket ${socket.id}`);
+    console.log(`[Server] User CID: ${userCid}, roomId: ${roomId}`);
+
+    if (!roomId) {
+      console.error("[Server] No roomId provided for room:join");
+      socket.emit("room:error", { message: "roomId is required" });
+      return;
+    }
+
+    const chatRoom = chatRooms.get(roomId);
+    if (!chatRoom) {
+      console.error("[Server] Chat room not found for roomId:", roomId);
+      console.log("[Server] Available rooms:", Array.from(chatRooms.keys()));
+      socket.emit("room:error", { message: "Chat room not found" });
+      return;
+    }
+
+    console.log(`[Server] Room found, user joining: ${roomId}`);
+    socket.join(roomId);
+    
+    console.log(`[Server] Socket ${socket.id} successfully joined room ${roomId}`);
+    console.log(`[Server] Emitting room:joined event back to client`);
+    
+    socket.emit("room:joined", {
+      success: true,
+      roomId,
+      messageCount: chatRoom.messages.length,
+    });
+    
+    console.log(`[Server] room:joined emitted successfully`);
   });
 
   // ─── Mark Message as Read ────────────────────────────

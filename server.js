@@ -194,6 +194,48 @@ io.on("connection", (socket) => {
     }
   });
 
+  // ─── Direct Add Connection (QR Code bypass) ─────────
+  socket.on("contact:add_direct", (data) => {
+    const { fromCid, toCid } = data; 
+    const requester = users.get(fromCid);
+    const accepter = users.get(toCid);
+
+    if (!requester || !accepter) return;
+
+    const roomId = generateRoomId(fromCid, toCid);
+
+    if (!chatRooms.has(roomId)) {
+      chatRooms.set(roomId, {
+        roomId,
+        userA: fromCid,
+        userB: toCid,
+        createdAt: new Date().toISOString(),
+        messages: [],
+        status: "active",
+      });
+    }
+
+    const roomData = { 
+        roomId, 
+        userA: fromCid, 
+        userB: toCid, 
+        requester: { cid: requester.cid, nickname: requester.nickname, avatar: requester.avatar },
+        accepter: { cid: accepter.cid, nickname: accepter.nickname, avatar: accepter.avatar }
+    };
+
+    // Notify requester
+    if (requester.socketId) {
+      io.to(requester.socketId).emit("contact:accepted", roomData);
+      io.sockets.sockets.get(requester.socketId)?.join(roomId);
+    }
+
+    // Notify accepter
+    if (accepter.socketId) {
+      io.to(accepter.socketId).emit("contact:accepted", roomData);
+      io.sockets.sockets.get(accepter.socketId)?.join(roomId);
+    }
+  });
+
   // ─── Send Message ────────────────────────────────────
   socket.on("message:send", (data) => {
     const { roomId, message, senderCid, senderNickname } = data;

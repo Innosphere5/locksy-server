@@ -14,7 +14,7 @@ const io = new Server(httpServer, {
   },
   transports: ["websocket", "polling"],
   path: "/socket.io/",
-  maxHttpBufferSize: 1e6,
+  maxHttpBufferSize: 10e6,
 });
 
 const PORT = process.env.PORT || 5000;

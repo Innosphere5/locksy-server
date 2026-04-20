@@ -14,7 +14,7 @@ const io = new Server(httpServer, {
   },
   transports: ["websocket", "polling"],
   path: "/socket.io/",
-  maxHttpBufferSize: 10e6,
+  maxHttpBufferSize: 100e6, // Supporting up to ~75MB Base64 payloads (50MB raw videos)
 });
 
 const PORT = process.env.PORT || 5000;
@@ -251,6 +251,7 @@ io.on("connection", (socket) => {
       message,
       timestamp: new Date().toISOString(),
       status: "delivered",
+      reactions: [],
     };
 
     room.messages.push(messageObj);
@@ -268,6 +269,77 @@ io.on("connection", (socket) => {
       pendingMessages.set(roomId, undelivered);
       console.log(`[Message] Buffered for offline user ${otherCid} in room ${roomId}`);
     }
+  });
+
+  // ─── Delete Message ──────────────────────────────────
+  socket.on("message:delete", (data) => {
+    const { roomId, messageId } = data;
+    const room = chatRooms.get(roomId);
+
+    if (!room) return;
+
+    // Remove from room's memory history
+    room.messages = room.messages.filter(m => m.id !== messageId);
+
+    // Remove from pending offline queue if it was stuck there
+    const pending = pendingMessages.get(roomId);
+    if (pending) {
+      pendingMessages.set(roomId, pending.filter(m => m.id !== messageId));
+    }
+
+    // Broadcast delete event to all active clients in the room
+    io.to(roomId).emit("message:deleted", { roomId, messageId });
+  });
+
+  // ─── React to Message ────────────────────────────────
+  socket.on("message:react", (data) => {
+    const { roomId, messageId, emoji, action } = data;
+    const room = chatRooms.get(roomId);
+
+    if (!room) return;
+
+    // Helper to update reactions
+    const updateReactions = (messages) => {
+      messages.forEach(m => {
+        if (m.id === messageId) {
+          if (!m.reactions) m.reactions = [];
+          if (action === 'add' && !m.reactions.includes(emoji)) {
+            m.reactions.push(emoji);
+          } else if (action === 'remove') {
+            m.reactions = m.reactions.filter(r => r !== emoji);
+          }
+        }
+      });
+    };
+
+    // Update room's memory history
+    updateReactions(room.messages);
+
+    // Update pending offline queue
+    const pending = pendingMessages.get(roomId);
+    if (pending) updateReactions(pending);
+
+    // Broadcast reaction event directly to room
+    io.to(roomId).emit("message:reaction:updated", data);
+  });
+
+  // ─── Message Opened (View Once) ──────────────────────
+  socket.on("message:opened", (data) => {
+    const { roomId, messageId } = data;
+    const room = chatRooms.get(roomId);
+
+    if (!room) return;
+
+    // Optional: Update in-memory history if you want persistence on server
+    room.messages.forEach(m => {
+      if (m.id === messageId) {
+        m.isOpened = true;
+      }
+    });
+
+    // Broadcast update to the room
+    io.to(roomId).emit("message:opened", { roomId, messageId });
+    console.log(`[Message] View-once message ${messageId} opened in room ${roomId}`);
   });
 
   // ─── Disconnect Handler ──────────────────────────────

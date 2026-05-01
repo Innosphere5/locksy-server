@@ -14,8 +14,10 @@
   "type": "module",
   "dependencies": {
     "cors": "^2.8.6",
+    "expo-server-sdk": "^6.1.0",
     "express": "^5.2.1",
+    "lowdb": "^1.0.0",
     "socket.io": "^4.8.3",
-    "uuid": "^9.0.1"
+    "uuid": "^14.0.0"
   }
 }

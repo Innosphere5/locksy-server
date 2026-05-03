@@ -55,6 +55,20 @@
       "avatar": null,
       "publicKey": "A+2nFvUCmF7NycjZJ/DXDNq2uXaBuu5rzcN2r2fFZt/c",
       "lastSeen": "2026-05-01T07:29:00.414Z"
+    },
+    {
+      "cid": "6GDU6M",
+      "nickname": "sohel_X",
+      "avatar": null,
+      "publicKey": "AwuJqg3zQN21HQNd1M/FYitK2dn90gyLmw+YflZYyPkG",
+      "lastSeen": "2026-05-03T13:24:24.435Z"
+    },
+    {
+      "cid": "JHLUZW",
+      "nickname": "rohitX",
+      "avatar": null,
+      "publicKey": "A2xq3u1oaSBvlvg1XxQ2STwBcjPtAdsMLhsu1i1YQyta",
+      "lastSeen": "2026-05-03T12:52:20.965Z"
     }
   ],
   "groups": [
@@ -502,7 +516,8 @@
         }
       ],
       "createdAt": "2026-05-01T07:00:19.730Z",
-      "messages": []
+      "messages": [],
+      "creatorPublicKey": "A+2nFvUCmF7NycjZJ/DXDNq2uXaBuu5rzcN2r2fFZt/c"
     },
     {
       "groupId": "c4960100-52fe-4f1c-a82b-4d02bf2cdfc7",
@@ -524,7 +539,8 @@
         }
       ],
       "createdAt": "2026-05-01T07:00:35.088Z",
-      "messages": []
+      "messages": [],
+      "creatorPublicKey": "A+2nFvUCmF7NycjZJ/DXDNq2uXaBuu5rzcN2r2fFZt/c"
     },
     {
       "groupId": "5b391089-0e24-4da9-bb76-9eea91b4fe40",
@@ -546,7 +562,8 @@
         }
       ],
       "createdAt": "2026-05-01T07:07:20.370Z",
-      "messages": []
+      "messages": [],
+      "creatorPublicKey": "A+2nFvUCmF7NycjZJ/DXDNq2uXaBuu5rzcN2r2fFZt/c"
     },
     {
       "groupId": "52fd773f-9388-4182-b719-00d615fc44e8",
@@ -568,7 +585,8 @@
         }
       ],
       "createdAt": "2026-05-01T07:29:19.847Z",
-      "messages": []
+      "messages": [],
+      "creatorPublicKey": "A+2nFvUCmF7NycjZJ/DXDNq2uXaBuu5rzcN2r2fFZt/c"
     }
   ],
   "chatRooms": [
@@ -854,6 +872,203 @@
         }
       ],
       "status": "active"
+    },
+    {
+      "roomId": "room_6GDU6M_JHLUZW",
+      "userA": "6GDU6M",
+      "userB": "JHLUZW",
+      "createdAt": "2026-05-03T12:28:44.787Z",
+      "messages": [
+        {
+          "id": "bb8a33a7-39f5-4586-8656-b49fc649f652",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "JHLUZW",
+          "senderNickname": "rohitX",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "text",
+            "originalType": "text",
+            "isViewOnce": false,
+            "text": "Hi"
+          },
+          "timestamp": "2026-05-03T12:28:50.641Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "21fba7b2-041c-4d2b-9db6-54ad6e9496a4",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "JHLUZW",
+          "senderNickname": "rohitX",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "text",
+            "originalType": "text",
+            "isViewOnce": false,
+            "text": "Hlo"
+          },
+          "timestamp": "2026-05-03T12:34:04.496Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "6fc4444b-cf57-48c8-866d-69ff55ad932c",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "text",
+            "originalType": "text",
+            "isViewOnce": false,
+            "text": "Hi"
+          },
+          "timestamp": "2026-05-03T12:34:12.556Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "cd5b03c3-d6f9-47e8-9a6b-092954871571",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "text",
+            "originalType": "text",
+            "isViewOnce": false,
+            "text": "Hlo"
+          },
+          "timestamp": "2026-05-03T12:52:27.987Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "f47f21da-63c3-4a2c-ba4a-4655780deb38",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "image",
+            "originalType": "image",
+            "isViewOnce": false,
+            "image": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777814165280-a09fca0a-7a9d-4c70-ae6a-8e9ab11bd76f.jpeg",
+            "text": "Sent a photo"
+          },
+          "timestamp": "2026-05-03T13:16:06.664Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "e71304b5-14c4-46c5-aefc-78fc79ec64f9",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "file",
+            "originalType": "file",
+            "isViewOnce": false,
+            "fileUri": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777814334817-ProductX_Project_Report.docx",
+            "fileName": "ProductX_Project_Report.docx",
+            "fileSize": 809776,
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "text": "Sent a file: ProductX_Project_Report.docx"
+          },
+          "timestamp": "2026-05-03T13:18:57.588Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "50b3ab0e-84f3-456f-a6ee-bf0d474f8ca1",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "image",
+            "originalType": "image",
+            "isViewOnce": false,
+            "image": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777814675095-e420bc07-1b9f-41d6-b31d-3804b7a831ad.jpeg",
+            "text": "Sent a photo"
+          },
+          "timestamp": "2026-05-03T13:24:38.542Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "7e7ddf06-5ddf-4e40-9a99-4de1bd16e18a",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "file",
+            "originalType": "file",
+            "isViewOnce": false,
+            "fileUri": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777814694552-ProductX_Project_Report__1_.docx",
+            "fileName": "ProductX_Project_Report (1).docx",
+            "fileSize": 29250,
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "text": "Sent a file: ProductX_Project_Report (1).docx"
+          },
+          "timestamp": "2026-05-03T13:24:56.608Z",
+          "status": "delivered",
+          "reactions": []
+        }
+      ],
+      "status": "active"
+    }
+  ],
+  "media": [
+    {
+      "id": "59008254-6d9c-43a6-8bcd-df2801560b48",
+      "key": "uploads/6GDU6M/1777814165280-a09fca0a-7a9d-4c70-ae6a-8e9ab11bd76f.jpeg",
+      "url": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777814165280-a09fca0a-7a9d-4c70-ae6a-8e9ab11bd76f.jpeg",
+      "type": "image",
+      "size": 79141,
+      "user_id": "6GDU6M",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "created_at": "2026-05-03T13:16:06.647Z"
+    },
+    {
+      "id": "7d47d55d-4461-4fe0-b0c2-43bc9dd935b9",
+      "key": "uploads/6GDU6M/1777814334817-ProductX_Project_Report.docx",
+      "url": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777814334817-ProductX_Project_Report.docx",
+      "type": "application",
+      "size": 809776,
+      "user_id": "6GDU6M",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "created_at": "2026-05-03T13:18:57.563Z"
+    },
+    {
+      "id": "f5c4f40b-3011-452d-903d-7c2a3cc7ffeb",
+      "key": "uploads/6GDU6M/1777814675095-e420bc07-1b9f-41d6-b31d-3804b7a831ad.jpeg",
+      "url": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777814675095-e420bc07-1b9f-41d6-b31d-3804b7a831ad.jpeg",
+      "type": "image",
+      "size": 552929,
+      "user_id": "6GDU6M",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "created_at": "2026-05-03T13:24:38.310Z"
+    },
+    {
+      "id": "564b416c-2172-4be9-b5f0-84508472376c",
+      "key": "uploads/6GDU6M/1777814694552-ProductX_Project_Report__1_.docx",
+      "url": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777814694552-ProductX_Project_Report__1_.docx",
+      "type": "application",
+      "size": 29250,
+      "user_id": "6GDU6M",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "created_at": "2026-05-03T13:24:56.456Z"
     }
   ]
 }

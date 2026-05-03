@@ -5,6 +5,18 @@ import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import low from 'lowdb';
 import FileSync from 'lowdb/adapters/FileSync.js';
+import dotenv from 'dotenv';
+import { 
+  S3Client, 
+  PutObjectCommand, 
+  CreateMultipartUploadCommand, 
+  UploadPartCommand, 
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand 
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+
+dotenv.config();
 
 const adapter = new FileSync('db.json');
 const db = low(adapter);
@@ -22,7 +34,18 @@ const io = new Server(httpServer, {
   maxHttpBufferSize: 100e6, 
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = 5050; // Force to 5050 to avoid Port 5000 conflicts
+
+// AWS S3 CONFIGURATION
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+  },
+});
+
+const BUCKET_NAME = process.env.AWS_BUCKET_NAME || 'locksy-bucket';
 
 // ─────────────────────────────────────────────────────────────
 // In-memory runtime state (Mirrors DB for performance)
@@ -34,6 +57,7 @@ const pendingMessages = new Map();
 const pendingRequests = new Map(); 
 const groups = new Map(); 
 const groupInvites = new Map(); 
+const mediaRegistry = new Map(); // Store media metadata
 
 // LOAD DATA FROM DB ON STARTUP
 const dbUsers = db.get('users').value() || [];
@@ -68,14 +92,40 @@ const loadFromDb = () => {
   
   const dbRooms = db.get('chatRooms').value();
   dbRooms.forEach(r => chatRooms.set(r.roomId, r));
+
+  const dbMedia = db.get('media').value() || [];
+  dbMedia.forEach(m => mediaRegistry.set(m.id, m));
   
-  console.log(`[DB] Loaded ${users.size} users, ${groups.size} groups, ${chatRooms.size} rooms`);
+  console.log(`[DB] Loaded ${users.size} users, ${groups.size} groups, ${chatRooms.size} rooms, ${mediaRegistry.size} media items`);
 };
 
 loadFromDb();
 
+// ─── S3 CONNECTIVITY TEST ───────────────────────────
+import { HeadBucketCommand } from "@aws-sdk/client-s3";
+const testS3 = async () => {
+  try {
+    await s3Client.send(new HeadBucketCommand({ Bucket: BUCKET_NAME }));
+    console.log(`✅ S3 Connection Success: Bucket "${BUCKET_NAME}" is reachable.`);
+  } catch (err) {
+    console.error(`❌ S3 Connection Failed: Cannot reach bucket "${BUCKET_NAME}". 
+      Check your AWS_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY.`);
+    console.error(`Error details: ${err.message}`);
+  }
+};
+testS3();
+
 app.use(Express.json());
 app.use(cors());
+
+// Global error handler for JSON parsing errors
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    console.error('[Server] Bad JSON received:', err.message);
+    return res.status(400).json({ error: 'Malformed JSON request' });
+  }
+  next();
+});
 
 // ─────────────────────────────────────────────────────────────
 // REST API ENDPOINTS
@@ -109,6 +159,199 @@ app.get("/api/debug/users", (req, res) => {
     status: u.status
   }));
   res.json(allUsers);
+});
+
+// ─────────────────────────────────────────────────────────────
+// MEDIA HANDLING API (AWS S3)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Generate Pre-signed URL for direct upload
+ */
+app.post("/api/media/upload-url", async (req, res) => {
+  try {
+    const { fileName, fileType, fileSize, userId } = req.body;
+
+    if (!fileName || !fileType || !userId) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Validation: Reject > 200MB
+    const MAX_SIZE = 200 * 1024 * 1024; // 200MB
+    if (fileSize > MAX_SIZE) {
+      return res.status(400).json({ error: "File too large (max 200MB)" });
+    }
+
+    // Allow only image/video/pdf/doc
+    const allowedTypes = ['image/', 'video/', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+    const isAllowed = allowedTypes.some(type => fileType.startsWith(type));
+    if (!isAllowed) {
+      return res.status(400).json({ error: "File type not allowed" });
+    }
+
+    const timestamp = Date.now();
+    const cleanFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const key = `uploads/${userId}/${timestamp}-${cleanFileName}`;
+
+    console.log(`[Media] Generating Signed URL:
+      - Key: ${key}
+      - ContentType: ${fileType}
+      - User: ${userId}
+      - Expiry: 300s`);
+
+    const command = new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+      ContentType: fileType,
+    });
+
+    const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 300 });
+    const fileUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+
+    res.json({
+      uploadUrl,
+      fileUrl,
+      key
+    });
+  } catch (error) {
+    console.error("[Media] Error generating upload URL:", error);
+    res.status(500).json({ error: "Failed to generate upload URL" });
+  }
+});
+
+/**
+ * Save file metadata to DB
+ */
+app.post("/api/media/save", (req, res) => {
+  try {
+    const { key, fileUrl, type, size, sender_id, chat_id } = req.body;
+
+    if (!key || !fileUrl || !type || !sender_id) {
+      return res.status(400).json({ error: "Missing required metadata fields" });
+    }
+
+    const mediaId = uuidv4();
+    const mediaObj = {
+      id: mediaId,
+      key,
+      url: fileUrl,
+      type, // image, video, doc
+      size,
+      user_id: sender_id,
+      chat_id: chat_id || null,
+      created_at: new Date().toISOString(),
+    };
+
+    mediaRegistry.set(mediaId, mediaObj);
+
+    // Save to DB
+    if (!db.has('media').value()) {
+      db.set('media', []).write();
+    }
+    db.get('media').push(mediaObj).write();
+
+    res.json({ success: true, media: mediaObj });
+  } catch (error) {
+    console.error("[Media] Error saving metadata:", error);
+    res.status(500).json({ error: "Failed to save media metadata" });
+  }
+});
+
+/**
+ * Fetch media for a specific chat
+ */
+app.get("/api/media", (req, res) => {
+  const { chat_id } = req.query;
+  if (!chat_id) return res.status(400).json({ error: "chat_id is required" });
+
+  const media = Array.from(mediaRegistry.values()).filter(m => m.chat_id === chat_id);
+  res.json(media);
+});
+
+// ─────────────────────────────────────────────────────────────
+// MULTIPART UPLOAD API
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Initiate Multipart Upload
+ */
+app.post("/api/media/multipart/initiate", async (req, res) => {
+  try {
+    const { fileName, fileType, userId } = req.body;
+    const timestamp = Date.now();
+    const cleanFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const key = `uploads/${userId}/${timestamp}-${cleanFileName}`;
+
+    const command = new CreateMultipartUploadCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+      ContentType: fileType,
+    });
+
+    const response = await s3Client.send(command);
+    res.json({
+      uploadId: response.UploadId,
+      key: response.Key,
+    });
+  } catch (error) {
+    console.error("[Media] Multipart initiate error:", error);
+    res.status(500).json({ error: "Failed to initiate multipart upload" });
+  }
+});
+
+/**
+ * Get Pre-signed URLs for parts
+ */
+app.post("/api/media/multipart/get-presigned-urls", async (req, res) => {
+  try {
+    const { key, uploadId, partNumbers } = req.body; // partNumbers: array of numbers
+
+    const urls = await Promise.all(
+      partNumbers.map(async (partNumber) => {
+        const command = new UploadPartCommand({
+          Bucket: BUCKET_NAME,
+          Key: key,
+          UploadId: uploadId,
+          PartNumber: partNumber,
+        });
+        return {
+          partNumber,
+          url: await getSignedUrl(s3Client, command, { expiresIn: 3600 }),
+        };
+      })
+    );
+
+    res.json({ urls });
+  } catch (error) {
+    console.error("[Media] Multipart URLs error:", error);
+    res.status(500).json({ error: "Failed to generate part URLs" });
+  }
+});
+
+/**
+ * Complete Multipart Upload
+ */
+app.post("/api/media/multipart/complete", async (req, res) => {
+  try {
+    const { key, uploadId, parts } = req.body; // parts: [{ ETag, PartNumber }]
+
+    const command = new CompleteMultipartUploadCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+      UploadId: uploadId,
+      MultipartUpload: {
+        Parts: parts.sort((a, b) => a.PartNumber - b.PartNumber),
+      },
+    });
+
+    await s3Client.send(command);
+    const fileUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+
+    res.json({ success: true, fileUrl, key });
+  } catch (error) {
+    console.error("[Media] Multipart complete error:", error);
+    res.status(500).json({ error: "Failed to complete multipart upload" });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────

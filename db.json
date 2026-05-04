@@ -61,7 +61,7 @@
       "nickname": "sohel_X",
       "avatar": null,
       "publicKey": "AwuJqg3zQN21HQNd1M/FYitK2dn90gyLmw+YflZYyPkG",
-      "lastSeen": "2026-05-03T13:24:24.435Z"
+      "lastSeen": "2026-05-04T08:51:20.834Z"
     },
     {
       "cid": "JHLUZW",
@@ -966,27 +966,6 @@
           "reactions": []
         },
         {
-          "id": "e71304b5-14c4-46c5-aefc-78fc79ec64f9",
-          "roomId": "room_6GDU6M_JHLUZW",
-          "groupId": null,
-          "senderCid": "6GDU6M",
-          "senderNickname": "sohel_X",
-          "senderAvatar": "👤",
-          "message": {
-            "type": "file",
-            "originalType": "file",
-            "isViewOnce": false,
-            "fileUri": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777814334817-ProductX_Project_Report.docx",
-            "fileName": "ProductX_Project_Report.docx",
-            "fileSize": 809776,
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "text": "Sent a file: ProductX_Project_Report.docx"
-          },
-          "timestamp": "2026-05-03T13:18:57.588Z",
-          "status": "delivered",
-          "reactions": []
-        },
-        {
           "id": "50b3ab0e-84f3-456f-a6ee-bf0d474f8ca1",
           "roomId": "room_6GDU6M_JHLUZW",
           "groupId": null,
@@ -1005,23 +984,295 @@
           "reactions": []
         },
         {
-          "id": "7e7ddf06-5ddf-4e40-9a99-4de1bd16e18a",
+          "id": "dd77a713-7179-4a7a-871e-57f3f3ae55b8",
           "roomId": "room_6GDU6M_JHLUZW",
           "groupId": null,
           "senderCid": "6GDU6M",
           "senderNickname": "sohel_X",
           "senderAvatar": "👤",
           "message": {
-            "type": "file",
-            "originalType": "file",
+            "type": "image",
+            "originalType": "image",
             "isViewOnce": false,
-            "fileUri": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777814694552-ProductX_Project_Report__1_.docx",
-            "fileName": "ProductX_Project_Report (1).docx",
-            "fileSize": 29250,
-            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "text": "Sent a file: ProductX_Project_Report (1).docx"
+            "image": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777881798838-c797d906-aeb3-4298-988e-6701cf18f8e6.jpeg",
+            "text": "Sent a photo"
           },
-          "timestamp": "2026-05-03T13:24:56.608Z",
+          "timestamp": "2026-05-04T08:03:22.484Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "d72bdd3e-2831-49d7-b8b1-b6ab9f0cb70b",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "image",
+            "originalType": "image",
+            "isViewOnce": false,
+            "image": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/e2ee/6GDU6M/1777882480149-04a2b4b7-1d18-4b16-86a6-73190ca7446f.jpg.bin",
+            "text": "Sent a photo",
+            "is_e2ee": true,
+            "media_id": "16d59530-ea8b-4d05-b70e-a37b2e7f3dc9"
+          },
+          "timestamp": "2026-05-04T08:14:43.415Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "32db2b10-4b8c-48c1-9dda-c27387a7c8a6",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "image",
+            "originalType": "image",
+            "isViewOnce": false,
+            "image": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/e2ee/6GDU6M/1777882523576-e7c03eec-6b54-4263-9cc3-e83027355672.jpg.bin",
+            "text": "Sent a photo",
+            "is_e2ee": true,
+            "media_id": "bf105f10-ad5c-47a8-b01c-0e8d2b43522e"
+          },
+          "timestamp": "2026-05-04T08:15:27.659Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "6bb44220-30fb-4c25-bffc-f932a41d7ca2",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "image",
+            "originalType": "image",
+            "isViewOnce": false,
+            "image": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/e2ee/6GDU6M/1777882665928-57d28ae3-8fea-4f2d-8176-6bedd52baae1.jpg.bin",
+            "text": "Sent a photo",
+            "is_e2ee": true,
+            "media_id": "300b8671-214a-4627-8092-9b04b877525a"
+          },
+          "timestamp": "2026-05-04T08:17:48.755Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "a2cb6302-1955-40ef-ae33-8e78ee1697e0",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "view-once",
+            "originalType": "video",
+            "isViewOnce": true,
+            "videoUri": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/e2ee/6GDU6M/1777883108857-26895c80-a647-4e34-9381-5a890fa17e6e.mp4.bin",
+            "text": "[View Once Content Expired]",
+            "is_e2ee": true,
+            "media_id": "f50bb482-4557-434b-ad1e-5a4626bb22b3",
+            "uri": null,
+            "image": null
+          },
+          "timestamp": "2026-05-04T08:25:13.762Z",
+          "status": "delivered",
+          "reactions": [],
+          "isOpened": true
+        },
+        {
+          "id": "f05a8aea-2c9f-4d0a-96a1-2c83704170b5",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "view-once",
+            "originalType": "image",
+            "isViewOnce": true,
+            "image": null,
+            "text": "[View Once Content Expired]",
+            "is_e2ee": true,
+            "media_id": "44e062b2-e079-4ca4-805b-c1c0c9933249",
+            "uri": null
+          },
+          "timestamp": "2026-05-04T08:26:22.576Z",
+          "status": "delivered",
+          "reactions": [],
+          "isOpened": true
+        },
+        {
+          "id": "99e7475b-4fb6-4724-8255-a285eb0b95e6",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "image",
+            "originalType": "image",
+            "isViewOnce": false,
+            "image": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/e2ee/6GDU6M/1777883394130-4afecf8b-1c65-426f-850f-2ea7ed50e3a2.jpg.bin",
+            "text": "Sent a photo",
+            "is_e2ee": true,
+            "media_id": "77bd8b11-1d0a-4d05-b628-a6c401ee4468"
+          },
+          "timestamp": "2026-05-04T08:29:56.838Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "03442101-8461-4bd2-af45-20a16a14b8fd",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "text",
+            "originalType": "text",
+            "isViewOnce": false,
+            "text": "Hi"
+          },
+          "timestamp": "2026-05-04T08:30:13.578Z",
+          "status": "delivered",
+          "reactions": []
+        },
+        {
+          "id": "1de4884e-fa76-4f75-85e0-c9800a9534a6",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "view-once",
+            "originalType": "image",
+            "isViewOnce": true,
+            "image": null,
+            "text": "[View Once Content Expired]",
+            "is_e2ee": true,
+            "media_id": "8e20da2d-c50c-42ee-89f1-073dd0bdfc52",
+            "uri": null
+          },
+          "timestamp": "2026-05-04T08:33:58.033Z",
+          "status": "delivered",
+          "reactions": [],
+          "isOpened": true
+        },
+        {
+          "id": "temp-1777884281016",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "id": "temp-1777884281016",
+            "type": "view-once",
+            "originalType": "image",
+            "isViewOnce": true,
+            "image": null,
+            "text": "[View Once Content Expired]",
+            "is_e2ee": true,
+            "media_id": "46eefabc-e186-4249-a8fe-746ad6624350",
+            "uri": null
+          },
+          "timestamp": "2026-05-04T08:44:44.765Z",
+          "status": "delivered",
+          "reactions": [],
+          "isOpened": true
+        },
+        {
+          "id": "temp-1777884300923",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "id": "temp-1777884300923",
+            "type": "view-once",
+            "originalType": "video",
+            "isViewOnce": true,
+            "videoUri": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/e2ee/6GDU6M/1777884300340-ffce5cca-0664-4f19-9999-45f9f8dfd9e3.mp4.bin",
+            "text": "[View Once Content Expired]",
+            "is_e2ee": true,
+            "media_id": "d1ce46f2-d699-43cf-9b80-a22c612d9479",
+            "uri": null,
+            "image": null
+          },
+          "timestamp": "2026-05-04T08:45:04.628Z",
+          "status": "delivered",
+          "reactions": [],
+          "isOpened": true
+        },
+        {
+          "id": "temp-1777884416692",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "id": "temp-1777884416692",
+            "type": "view-once",
+            "originalType": "image",
+            "isViewOnce": true,
+            "image": null,
+            "text": "[View Once Content Expired]",
+            "is_e2ee": true,
+            "media_id": "14255597-6994-4324-8b97-1ce8f4e660c5",
+            "uri": null
+          },
+          "timestamp": "2026-05-04T08:47:00.745Z",
+          "status": "delivered",
+          "reactions": [],
+          "isOpened": true
+        },
+        {
+          "id": "f1befff6-b9a5-4afe-9753-2b97fae61853",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "type": "view-once",
+            "originalType": "text",
+            "isViewOnce": true,
+            "text": "[View Once Content Expired]",
+            "uri": null,
+            "image": null
+          },
+          "timestamp": "2026-05-04T08:51:31.068Z",
+          "status": "delivered",
+          "reactions": [],
+          "isOpened": true
+        },
+        {
+          "id": "temp-1777884705598",
+          "roomId": "room_6GDU6M_JHLUZW",
+          "groupId": null,
+          "senderCid": "6GDU6M",
+          "senderNickname": "sohel_X",
+          "senderAvatar": "👤",
+          "message": {
+            "id": "temp-1777884705598",
+            "type": "view-once",
+            "originalType": "image",
+            "isViewOnce": true,
+            "image": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/e2ee/6GDU6M/1777884705029-0b137640-006d-4229-87be-8ebb814e20bd.jpg.bin",
+            "text": "Sent a view-once photo",
+            "is_e2ee": true,
+            "media_id": "459ea856-c822-4648-bdc7-90256ea6fa60"
+          },
+          "timestamp": "2026-05-04T08:51:49.500Z",
           "status": "delivered",
           "reactions": []
         }
@@ -1069,6 +1320,159 @@
       "user_id": "6GDU6M",
       "chat_id": "room_6GDU6M_JHLUZW",
       "created_at": "2026-05-03T13:24:56.456Z"
+    },
+    {
+      "id": "3ed871bc-0391-43af-a8b3-8b823c1bfeaa",
+      "key": "uploads/6GDU6M/1777881798838-c797d906-aeb3-4298-988e-6701cf18f8e6.jpeg",
+      "url": "https://locksy-bucket.s3.eu-north-1.amazonaws.com/uploads/6GDU6M/1777881798838-c797d906-aeb3-4298-988e-6701cf18f8e6.jpeg",
+      "type": "image",
+      "size": 2992197,
+      "user_id": "6GDU6M",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "created_at": "2026-05-04T08:03:22.106Z"
+    },
+    {
+      "id": "16d59530-ea8b-4d05-b70e-a37b2e7f3dc9",
+      "s3_key": "e2ee/6GDU6M/1777882480149-04a2b4b7-1d18-4b16-86a6-73190ca7446f.jpg.bin",
+      "nonce": "oZTHaW8VzL8xo5cGRfIAAFBpoA7cGYVY",
+      "file_name": "04a2b4b7-1d18-4b16-86a6-73190ca7446f.jpg",
+      "mime_type": "application/octet-stream",
+      "size": 4372771,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:14:43.039Z"
+    },
+    {
+      "id": "bf105f10-ad5c-47a8-b01c-0e8d2b43522e",
+      "s3_key": "e2ee/6GDU6M/1777882523576-e7c03eec-6b54-4263-9cc3-e83027355672.jpg.bin",
+      "nonce": "sR5cKDzR6gEm4zCarIffKRmRUmTx9zz0",
+      "file_name": "e7c03eec-6b54-4263-9cc3-e83027355672.jpg",
+      "mime_type": "application/octet-stream",
+      "size": 4061233,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:15:27.293Z"
+    },
+    {
+      "id": "300b8671-214a-4627-8092-9b04b877525a",
+      "s3_key": "e2ee/6GDU6M/1777882665928-57d28ae3-8fea-4f2d-8176-6bedd52baae1.jpg.bin",
+      "nonce": "wD4iA1mKa/YoZRc3OKzE3+6YXwJLa8sw",
+      "file_name": "57d28ae3-8fea-4f2d-8176-6bedd52baae1.jpg",
+      "mime_type": "application/octet-stream",
+      "size": 814599,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:17:48.377Z"
+    },
+    {
+      "id": "f50bb482-4557-434b-ad1e-5a4626bb22b3",
+      "s3_key": "e2ee/6GDU6M/1777883108857-26895c80-a647-4e34-9381-5a890fa17e6e.mp4.bin",
+      "nonce": "rvPZj6s9ZfVFVPAFrvDEogZR0GzsfQNV",
+      "file_name": "26895c80-a647-4e34-9381-5a890fa17e6e.mp4",
+      "mime_type": "application/octet-stream",
+      "size": 336872,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:25:13.372Z"
+    },
+    {
+      "id": "44e062b2-e079-4ca4-805b-c1c0c9933249",
+      "s3_key": "e2ee/6GDU6M/1777883177668-e9fe3419-1693-461b-a697-76a23572647d.jpg.bin",
+      "nonce": "XSZopnwvLi2b3mHEd7M1ocWSGDJg085c",
+      "file_name": "e9fe3419-1693-461b-a697-76a23572647d.jpg",
+      "mime_type": "application/octet-stream",
+      "size": 807284,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:26:22.191Z"
+    },
+    {
+      "id": "77bd8b11-1d0a-4d05-b628-a6c401ee4468",
+      "s3_key": "e2ee/6GDU6M/1777883394130-4afecf8b-1c65-426f-850f-2ea7ed50e3a2.jpg.bin",
+      "nonce": "pCGCMtfMJyRPyMiYo0yU7U1fDdu4Y2GM",
+      "file_name": "4afecf8b-1c65-426f-850f-2ea7ed50e3a2.jpg",
+      "mime_type": "application/octet-stream",
+      "size": 40404,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:29:56.720Z"
+    },
+    {
+      "id": "8e20da2d-c50c-42ee-89f1-073dd0bdfc52",
+      "s3_key": "e2ee/6GDU6M/1777883633329-7b21877e-fa08-4d4c-856d-84479a84c553.jpg.bin",
+      "nonce": "5ZPCqNkrv2taU9c1Efo+/Sgg7THW07ic",
+      "file_name": "7b21877e-fa08-4d4c-856d-84479a84c553.jpg",
+      "mime_type": "application/octet-stream",
+      "size": 1055595,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:33:57.649Z"
+    },
+    {
+      "id": "46eefabc-e186-4249-a8fe-746ad6624350",
+      "s3_key": "e2ee/6GDU6M/1777884280877-7d222580-f997-4160-abe3-b31848503aa7.jpg.bin",
+      "nonce": "r7+hGgSjU6QTPbfB2eydLVy7mGYtEBf/",
+      "file_name": "7d222580-f997-4160-abe3-b31848503aa7.jpg",
+      "mime_type": "application/octet-stream",
+      "size": 144963,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:44:44.385Z"
+    },
+    {
+      "id": "d1ce46f2-d699-43cf-9b80-a22c612d9479",
+      "s3_key": "e2ee/6GDU6M/1777884300340-ffce5cca-0664-4f19-9999-45f9f8dfd9e3.mp4.bin",
+      "nonce": "e4AQbSQrTjVVUVqa6TAv3syLbsIhiX7V",
+      "file_name": "ffce5cca-0664-4f19-9999-45f9f8dfd9e3.mp4",
+      "mime_type": "application/octet-stream",
+      "size": 336872,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:45:04.256Z"
+    },
+    {
+      "id": "14255597-6994-4324-8b97-1ce8f4e660c5",
+      "s3_key": "e2ee/6GDU6M/1777884416250-71c15209-b892-461f-bfe8-b951628e8d68.jpg.bin",
+      "nonce": "IW1pXKUGZ4TdM5I2HD3JLHx+XciuZbyT",
+      "file_name": "71c15209-b892-461f-bfe8-b951628e8d68.jpg",
+      "mime_type": "application/octet-stream",
+      "size": 172885,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:47:00.374Z"
+    },
+    {
+      "id": "459ea856-c822-4648-bdc7-90256ea6fa60",
+      "s3_key": "e2ee/6GDU6M/1777884705029-0b137640-006d-4229-87be-8ebb814e20bd.jpg.bin",
+      "nonce": "kSvV8xnNrmlCB1Uc9KmS4fvQ4h5rnM9M",
+      "file_name": "0b137640-006d-4229-87be-8ebb814e20bd.jpg",
+      "mime_type": "application/octet-stream",
+      "size": 172885,
+      "sender_id": "6GDU6M",
+      "receiver_id": "JHLUZW",
+      "chat_id": "room_6GDU6M_JHLUZW",
+      "is_e2ee": true,
+      "timestamp": "2026-05-04T08:51:49.122Z"
     }
   ]
 }

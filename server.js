@@ -269,6 +269,140 @@ app.get("/api/media", (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// E2EE MEDIA HANDLING API (STRICT PRIVACY)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Generate Pre-signed URL for E2EE Upload (Direct to S3)
+ * Backend NEVER receives file data or keys.
+ */
+app.post("/api/media/e2ee/upload-url", async (req, res) => {
+  try {
+    const { fileName, userId } = req.body;
+
+    if (!fileName || !userId) {
+      return res.status(400).json({ error: "Missing fileName or userId" });
+    }
+
+    const timestamp = Date.now();
+    const cleanFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
+    // Store as binary blob (encrypted cipher)
+    const key = `e2ee/${userId}/${timestamp}-${cleanFileName}.bin`;
+
+    console.log(`[E2EE-Media] Generating Upload URL for ${key}`);
+
+    const command = new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+      ContentType: 'application/octet-stream', // Force binary for encrypted data
+    });
+
+    const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 60 }); // Short expiry (60s)
+
+    res.json({
+      uploadUrl,
+      key
+    });
+  } catch (error) {
+    console.error("[E2EE-Media] Error generating upload URL:", error);
+    res.status(500).json({ error: "Failed to generate upload URL" });
+  }
+});
+
+/**
+ * Generate Pre-signed URL for E2EE Download
+ */
+app.get("/api/media/e2ee/download-url", async (req, res) => {
+  try {
+    const { media_id } = req.query;
+
+    if (!media_id) {
+      return res.status(400).json({ error: "Missing media_id" });
+    }
+
+    // Look up metadata in DB
+    const media = db.get('media').find({ id: media_id }).value();
+    if (!media) {
+      return res.status(404).json({ error: "Media metadata not found" });
+    }
+
+    console.log(`[E2EE-Media] Generating Download URL for ID: ${media_id} (Key: ${media.s3_key})`);
+
+    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+    const command = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: media.s3_key,
+    });
+
+    const downloadUrl = await getSignedUrl(s3Client, command, { expiresIn: 60 });
+
+    res.json({
+      downloadUrl,
+      s3_key: media.s3_key,
+      nonce: media.nonce,
+      file_name: media.file_name,
+      mime_type: media.mime_type
+    });
+  } catch (error) {
+    console.error("[E2EE-Media] Error generating download URL:", error);
+    res.status(500).json({ error: "Failed to generate download URL" });
+  }
+});
+
+/**
+ * Save E2EE Metadata (Cipher Metadata)
+ * Store everything EXCEPT content and keys.
+ */
+app.post("/api/media/e2ee/save-metadata", (req, res) => {
+  try {
+    const { 
+      key, 
+      nonce, 
+      file_name, 
+      mime_type, 
+      sender_id, 
+      receiver_id, 
+      chat_id, 
+      size 
+    } = req.body;
+
+    if (!key || !nonce || !sender_id || !file_name) {
+      return res.status(400).json({ error: "Missing required E2EE metadata" });
+    }
+
+    const mediaId = uuidv4();
+    const mediaObj = {
+      id: mediaId,
+      s3_key: key,
+      nonce, // Base64 encoded nonce
+      file_name,
+      mime_type,
+      size,
+      sender_id,
+      receiver_id: receiver_id || null,
+      chat_id: chat_id || null,
+      is_e2ee: true,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Store in media registry and DB
+    mediaRegistry.set(mediaId, mediaObj);
+    
+    if (!db.has('media').value()) {
+      db.set('media', []).write();
+    }
+    db.get('media').push(mediaObj).write();
+
+    console.log(`[E2EE-Media] Metadata saved for ${file_name} (ID: ${mediaId})`);
+
+    res.json({ success: true, media: mediaObj });
+  } catch (error) {
+    console.error("[E2EE-Media] Error saving metadata:", error);
+    res.status(500).json({ error: "Failed to save E2EE metadata" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
 // MULTIPART UPLOAD API
 // ─────────────────────────────────────────────────────────────
 

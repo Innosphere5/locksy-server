@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from "uuid";
 import low from 'lowdb';
 import FileSync from 'lowdb/adapters/FileSync.js';
 import dotenv from 'dotenv';
-import admin from "firebase-admin";
+
 import {
   S3Client,
   PutObjectCommand,

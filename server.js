@@ -62,7 +62,7 @@ const io = new Server(httpServer, {
   maxHttpBufferSize: 100e6,
 });
 
-const PORT = 5050; // Force to 5050 to avoid Port 5000 conflicts
+const PORT = process.env.PORT || 5050; // Use process.env.PORT for Render/Production
 
 // AWS S3 CONFIGURATION
 const s3Client = new S3Client({

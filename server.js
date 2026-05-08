@@ -9,17 +9,39 @@ import dotenv from 'dotenv';
 import { 
   S3Client, 
   PutObjectCommand, 
+  GetObjectCommand,
   CreateMultipartUploadCommand, 
   UploadPartCommand, 
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand 
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import admin from "firebase-admin";
+import { readFile } from "fs/promises";
 
 dotenv.config();
 
+// Initialize Firebase Admin
+const serviceAccount = JSON.parse(
+  await readFile(new URL("./serviceAccountKey.json", import.meta.url))
+);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+
 const adapter = new FileSync('db.json');
 const db = low(adapter);
+
+// Initialize DB defaults
+db.defaults({
+  users: [],
+  chatRooms: [],
+  groups: [],
+  media: [],
+  groupInvites: []
+}).write();
 
 const app = Express();
 const httpServer = createServer(app);
@@ -48,7 +70,7 @@ const s3Client = new S3Client({
 const BUCKET_NAME = process.env.AWS_BUCKET_NAME || 'locksy-bucket';
 
 // ─────────────────────────────────────────────────────────────
-// In-memory runtime state (Mirrors DB for performance)
+// In-memory runtime state (Mirrors Persistent Store for performance)
 // ─────────────────────────────────────────────────────────────
 const users = new Map(); 
 const chatRooms = new Map(); 
@@ -57,46 +79,87 @@ const pendingMessages = new Map();
 const pendingRequests = new Map(); 
 const groups = new Map(); 
 const groupInvites = new Map(); 
-const mediaRegistry = new Map(); // Store media metadata
+const mediaRegistry = new Map();
 
-// LOAD DATA FROM DB ON STARTUP
+// S3 Persistence Helper for Groups
+const syncGroupsToS3 = async () => {
+  try {
+    const groupsArray = Array.from(groups.values());
+    
+    // 1. Sync to local DB for fast fallback
+    db.set('groups', groupsArray).write();
+    
+    // 2. Sync to S3 for remote persistence
+    await s3Client.send(new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: 'persistence/groups.json',
+      Body: JSON.stringify(groupsArray),
+      ContentType: 'application/json'
+    }));
+    console.log('[S3] Groups synced to bucket and local DB');
+  } catch (err) {
+    console.error('[S3] Sync failed:', err);
+  }
+};
+
+const loadGroupsFromS3 = async () => {
+  try {
+    console.log('[S3] Attempting to load groups from bucket...');
+    const command = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: 'persistence/groups.json',
+    });
+    
+    const response = await s3Client.send(command);
+    const stream = response.Body;
+    const data = await new Promise((resolve, reject) => {
+      const chunks = [];
+      stream.on('data', chunk => chunks.push(chunk));
+      stream.on('error', reject);
+      stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    });
+
+    const groupsArray = JSON.parse(data);
+    groupsArray.forEach(g => groups.set(g.groupId, g));
+    console.log(`✅ [S3] Successfully loaded ${groups.size} groups from bucket`);
+  } catch (err) {
+    console.warn('[S3] Load from bucket failed (using local fallback):', err.message);
+    // FALLBACK: Load from db.json if S3 is not yet established
+    const dbGroups = db.get('groups').value() || [];
+    dbGroups.forEach(g => groups.set(g.groupId, g));
+    console.log(`[Startup] Loaded ${groups.size} groups from local persistent store`);
+  }
+};
+
+// LOAD DATA ON STARTUP
 const dbUsers = db.get('users').value() || [];
 dbUsers.forEach(u => users.set(u.cid, u));
 
-const dbGroups = db.get('groups').value() || [];
-dbGroups.forEach(g => {
-  // BACKFILL: If group is missing creatorPublicKey, try to find it from users
-  if (!g.creatorPublicKey && g.createdBy) {
-    const creator = users.get(g.createdBy);
-    if (creator && creator.publicKey) {
-      g.creatorPublicKey = creator.publicKey;
-      db.get('groups').find({ groupId: g.groupId }).assign({ creatorPublicKey: g.creatorPublicKey }).write();
-      console.log(`[Startup] Backfilled creatorPublicKey for group: ${g.name}`);
-    }
-  }
-  groups.set(g.groupId, g);
-});
-
-const dbRooms = db.get('chatRooms').value() || [];
-dbRooms.forEach(r => chatRooms.set(r.roomId, r));
-
-console.log(`[Startup] Loaded ${users.size} users, ${groups.size} groups, and ${chatRooms.size} rooms from DB`);
+// Await S3 load (with local DB fallback)
+await loadGroupsFromS3();
 
 // Sync Maps with DB on startup
 const loadFromDb = () => {
-  const dbUsers = db.get('users').value();
+  const dbUsers = db.get('users').value() || [];
   dbUsers.forEach(u => users.set(u.cid, { ...u, socketId: null, status: 'offline' }));
   
-  const dbGroups = db.get('groups').value();
+  const dbGroups = db.get('groups').value() || [];
   dbGroups.forEach(g => groups.set(g.groupId, g));
   
-  const dbRooms = db.get('chatRooms').value();
+  const dbRooms = db.get('chatRooms').value() || [];
   dbRooms.forEach(r => chatRooms.set(r.roomId, r));
 
   const dbMedia = db.get('media').value() || [];
   dbMedia.forEach(m => mediaRegistry.set(m.id, m));
   
-  console.log(`[DB] Loaded ${users.size} users, ${groups.size} groups, ${chatRooms.size} rooms, ${mediaRegistry.size} media items`);
+  const dbInvites = db.get('groupInvites').value() || [];
+  dbInvites.forEach(inv => {
+    const existing = groupInvites.get(inv.cid) || [];
+    existing.push(...inv.invites);
+    groupInvites.set(inv.cid, existing);
+  });
+  
+  console.log(`[DB] Loaded ${users.size} users, ${groups.size} groups, ${chatRooms.size} rooms, ${mediaRegistry.size} media items, ${groupInvites.size} users with invites`);
 };
 
 loadFromDb();
@@ -115,7 +178,40 @@ const testS3 = async () => {
 };
 testS3();
 
+// ─── Push Notification Helper ───────────────────────
+const sendPushNotification = async (token, title, body, data = {}) => {
+  if (!token) return;
+
+  const message = {
+    notification: { title, body },
+    data: {
+      ...data,
+      click_action: "FLUTTER_NOTIFICATION_CLICK", // For older Android versions
+    },
+    android: {
+      priority: 'high',
+      notification: {
+        channelId: "default",
+        priority: "high",
+        sound: "default",
+      },
+    },
+    token: token,
+  };
+
+  try {
+    const response = await admin.messaging().send(message);
+    console.log(`[Push] Successfully sent to ${token.substring(0, 10)}... :`, response);
+  } catch (error) {
+    console.error("[Push] Error sending notification:", error);
+    if (error.code === 'messaging/registration-token-not-registered') {
+      console.warn(`[Push] Token no longer valid, should prune from DB`);
+    }
+  }
+};
+
 app.use(Express.json());
+
 app.use(cors());
 
 // Global error handler for JSON parsing errors
@@ -297,7 +393,7 @@ app.post("/api/media/e2ee/upload-url", async (req, res) => {
       ContentType: 'application/octet-stream', // Force binary for encrypted data
     });
 
-    const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 60 }); // Short expiry (60s)
+    const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 300 }); // 5 minutes expiry
 
     res.json({
       uploadUrl,
@@ -334,7 +430,7 @@ app.get("/api/media/e2ee/download-url", async (req, res) => {
       Key: media.s3_key,
     });
 
-    const downloadUrl = await getSignedUrl(s3Client, command, { expiresIn: 60 });
+    const downloadUrl = await getSignedUrl(s3Client, command, { expiresIn: 300 });
 
     res.json({
       downloadUrl,
@@ -497,8 +593,12 @@ io.on("connection", (socket) => {
 
   // ─── User Registration ───────────────────────────────
   socket.on("register", (data) => {
-    const { cid, nickname, avatar, publicKey } = data;
+    const { cid, nickname, avatar, publicKey, pushToken } = data;
+
     if (!cid) return socket.emit("register:error", { message: "CID is required" });
+
+    // Store CID on socket for validation in later events
+    socket.cid = cid;
 
     // Update existing user or create new
     const existingUser = users.get(cid) || {};
@@ -508,9 +608,11 @@ io.on("connection", (socket) => {
       nickname: (nickname && nickname.trim()) ? nickname : `User-${cid.substring(0, 4)}`,
       avatar: avatar || existingUser.avatar || null,
       publicKey: publicKey || existingUser.publicKey || null,
+      pushToken: pushToken || existingUser.pushToken || null,
       status: "online",
       lastSeen: new Date().toISOString()
     };
+
     
     users.set(cid, userData);
     userSockets.set(socket.id, cid);
@@ -536,20 +638,32 @@ io.on("connection", (socket) => {
       pendingRequests.delete(cid); // Clear after delivery
     }
 
-    // Check for pending group invites
+    // Check for pending group invites (NEW: groep:invite)
     const invites = groupInvites.get(cid);
     if (invites && invites.length > 0) {
-      invites.forEach(inv => socket.emit("group:invite", inv));
+      invites.forEach(inv => socket.emit("groep:invite", inv));
       groupInvites.delete(cid);
     }
 
-    // Auto-join group rooms
+    // Auto-rejoin rooms & collect active groups for the user
+    const userGroups = [];
     groups.forEach((group, groupId) => {
       if (group.members.some(m => m.cid === cid)) {
-        socket.join(groupId);
-        console.log(`[Join] User ${cid} auto-joined group ${groupId}`);
+        socket.join(`group_${groupId}`);
+        userGroups.push({
+          groupId: group.groupId,
+          name: group.name,
+          groupLogo: group.groupLogo,
+          adminId: group.adminId,
+          members: group.members,
+          createdAt: group.createdAt
+        });
+        console.log(`[Join] User ${cid} auto-rejoined group_${groupId}`);
       }
     });
+
+    // Send the current list of groups to the client for reconciliation
+    socket.emit("groep:list", userGroups);
 
     // Deliver pending messages for all rooms this user is in
     chatRooms.forEach((room, roomId) => {
@@ -557,7 +671,6 @@ io.on("connection", (socket) => {
         socket.join(roomId);
         const undelivered = pendingMessages.get(roomId);
         if (undelivered && undelivered.length > 0) {
-          // Sort by timestamp just in case
           undelivered.forEach(msg => socket.emit("message:received", msg));
           pendingMessages.delete(roomId);
         }
@@ -722,121 +835,247 @@ io.on("connection", (socket) => {
     }
   });
 
-// ─── Group Management ────────────────────────────────
-socket.on("group:create", (data) => {
-  const { name, description, creatorCid, members } = data; // members: [{cid, nickname, role, encryptedKey}]
+// ─── Group Management (REFINED) ─────────────────────
+socket.on("groep:create", (data) => {
+  const { groupName: name, description, adminId, members: memberList } = data; 
   const groupId = uuidv4();
 
-  // Find the creator's entry in the members list to get their nickname/role
-  const creatorEntry = members.find(m => m.cid === creatorCid) || { cid: creatorCid, nickname: 'Admin', role: 'ADMIN' };
+  const adminUser = users.get(adminId);
+  const adminEntry = { 
+    cid: adminId, 
+    nickname: adminUser?.nickname || 'Admin', 
+    role: 'ADMIN',
+    encryptedKey: null // Admin has the raw key
+  };
 
   const groupObj = {
     groupId,
     name,
     description,
-    createdBy: creatorCid,
-    creatorPublicKey: creatorEntry.publicKey,
-    members: [creatorEntry], // Initially only the creator is a member
+    groupLogo: data.groupLogo || null, // NEW: Support for group logo
+    adminId,
+    adminPublicKey: adminUser?.publicKey || null,
+    members: [adminEntry], // Only admin is a member initially
+    pendingInvites: memberList.filter(m => m.cid !== adminId),
     createdAt: new Date().toISOString(),
     messages: []
   };
 
   groups.set(groupId, groupObj);
-  socket.join(groupId);
+  socket.join(`group_${groupId}`);
 
-  // Save to DB
-  db.get('groups').push(groupObj).write();
+  // Sync to S3 (instead of db.json)
+  syncGroupsToS3();
 
-  console.log(`[Group] Created: ${name} (${groupId}) by ${creatorCid}`);
+  console.log(`[Group] Created: ${name} (${groupId}) by ${adminId}`);
 
-  // Send invitations to all other intended members
-  const otherMembers = members.filter(m => m.cid !== creatorCid);
-  
-  otherMembers.forEach(m => {
+  // Send invitations to all pending members
+  groupObj.pendingInvites.forEach(invitee => {
     const inviteData = {
       groupId,
       groupName: name,
-      fromNickname: creatorEntry.nickname,
-      nickname: m.nickname,
-      encryptedKey: m.encryptedKey,
+      fromNickname: adminEntry.nickname,
+      adminId: adminId, // Include admin's CID
+      adminPublicKey: adminUser?.publicKey || null,
+      encryptedKey: invitee.encryptedKey, // Include the key for E2EE
       timestamp: new Date().toISOString(),
     };
 
-    const targetUser = users.get(m.cid);
+    const targetUser = users.get(invitee.cid);
     if (targetUser && targetUser.status === "online" && targetUser.socketId) {
-      io.to(targetUser.socketId).emit("group:invite", inviteData);
-      console.log(`[Group] Sent real-time invite to ${m.cid} for group ${name}`);
+      io.to(targetUser.socketId).emit("groep:invite", inviteData);
+      console.log(`[Group] Sent real-time invite to ${invitee.cid}`);
     } else {
-      const existing = groupInvites.get(m.cid) || [];
+      const existing = groupInvites.get(invitee.cid) || [];
       existing.push(inviteData);
-      groupInvites.set(m.cid, existing);
-      console.log(`[Group] Buffered offline invite for ${m.cid} for group ${name}`);
+      groupInvites.set(invitee.cid, existing);
+      
+      // Persist invites to DB
+      const allInvites = Array.from(groupInvites.entries()).map(([cid, invites]) => ({ cid, invites }));
+      db.set('groupInvites', allInvites).write();
+      
+      console.log(`[Group] Buffered offline invite for ${invitee.cid}`);
     }
   });
 
-  socket.emit("group:create:success", { ...groupObj, groupKey: data.groupKey });
+  socket.emit("groep:created", { groupId, name });
 });
 
-socket.on("group:invite", (data) => {
-  const { groupId, adminCid, memberCid, nickname, encryptedKey } = data;
+socket.on("groep:accept", (data) => {
+  const { groupId, userId } = data; // userId is CID
   const group = groups.get(groupId);
 
-  if (!group) return socket.emit("group:error", { message: "Group not found" });
+  if (!group) return socket.emit("groep:error", { message: "Group not found" });
+
+  // Find user in pendingInvites
+  const inviteEntry = group.pendingInvites.find(m => m.cid === userId);
+  if (!inviteEntry) {
+    return socket.emit("groep:error", { message: "No pending invite for this user" });
+  }
+
+  // Move from pendingInvites to members
+  group.pendingInvites = group.pendingInvites.filter(m => m.cid !== userId);
+  
+  const user = users.get(userId);
+  const newMember = { 
+    cid: userId, 
+    nickname: user?.nickname || `User-${userId.substring(0, 4)}`, 
+    role: 'MEMBER',
+    encryptedKey: inviteEntry.encryptedKey
+  };
+  
+  group.members.push(newMember);
+
+  // Sync to S3
+  syncGroupsToS3();
+
+  // Join the user to the socket room
+  const targetSocketId = user?.socketId;
+  if (targetSocketId) {
+    const targetSocket = io.sockets.sockets.get(targetSocketId);
+    if (targetSocket) {
+      targetSocket.join(`group_${groupId}`);
+      console.log(`[Group] User ${userId} accepted and joined room group_${groupId}`);
+    }
+  }
+
+  // Notify the user they joined successfully
+  socket.emit("groep:joined", { groupId, groupName: group.name });
+
+  // Broadcast update to the group
+  io.to(`group_${groupId}`).emit("group:update", { 
+    type: 'member_added', 
+    groupId,
+    member: { cid: userId, nickname: newMember.nickname } 
+  });
+});
+socket.on("groep:invite:send", (data) => {
+  const { groupId, adminCid, memberCid, encryptedKey } = data;
+  const group = groups.get(groupId);
+
+  if (!group) return socket.emit("groep:error", { message: "Group not found" });
 
   const admin = group.members.find(m => m.cid === adminCid && m.role === 'ADMIN');
-  if (!admin) return socket.emit("group:error", { message: "Unauthorized" });
+  if (!admin) return socket.emit("groep:error", { message: "Unauthorized: Admin only" });
+
+  // Add to pendingInvites if not already there or a member
+  if (group.members.some(m => m.cid === memberCid)) return;
+  if (!group.pendingInvites.some(m => m.cid === memberCid)) {
+    group.pendingInvites.push({ cid: memberCid, encryptedKey });
+    db.get('groups').find({ groupId }).assign({ pendingInvites: group.pendingInvites }).write();
+  }
 
   const inviteData = {
     groupId,
     groupName: group.name,
     fromNickname: admin.nickname,
-    nickname,
+    adminId: adminCid,
+    adminPublicKey: admin.publicKey || group.adminPublicKey,
     encryptedKey,
     timestamp: new Date().toISOString(),
   };
 
   const targetUser = users.get(memberCid);
   if (targetUser && targetUser.status === "online" && targetUser.socketId) {
-    io.to(targetUser.socketId).emit("group:invite", inviteData);
-  } else {
-    const existing = groupInvites.get(memberCid) || [];
-    existing.push(inviteData);
-    groupInvites.set(memberCid, existing);
+    io.to(targetUser.socketId).emit("groep:invite", inviteData);
+    console.log(`[Group] Invite sent to ${memberCid} for group ${group.name}`);
+    } else {
+      const existing = groupInvites.get(memberCid) || [];
+      existing.push(inviteData);
+      groupInvites.set(memberCid, existing);
+      
+      // Persist invites to DB
+      const allInvites = Array.from(groupInvites.entries()).map(([cid, invites]) => ({ cid, invites }));
+      db.set('groupInvites', allInvites).write();
+      
+      console.log(`[Group] Buffered offline invite for ${memberCid}`);
+    }
+});
+
+socket.on("groep:remove_member", (data) => {
+  const { groupId, adminCid, memberCid } = data;
+  const group = groups.get(groupId);
+
+  if (!group) return socket.emit("groep:error", { message: "Group not found" });
+
+  // 1. Validate Admin
+  if (group.adminId !== adminCid) {
+    return socket.emit("groep:error", { message: "Unauthorized: Admin only" });
+  }
+
+  // Find the member to get their nickname before removing
+  const removedMember = group.members.find(m => m.cid === memberCid);
+
+  // 2. Remove Member
+  group.members = group.members.filter(m => m.cid !== memberCid);
+  
+  // 3. Save & Sync
+  syncGroupsToS3();
+
+  // 4. Notify & Force Leave Socket Room
+  io.to(`group_${groupId}`).emit("group:update", { 
+    type: 'member_removed', 
+    groupId,
+    groupName: group.name,
+    memberCid,
+    memberNickname: removedMember?.nickname || 'A member'
+  });
+
+  // Find the socket of the removed member and make them leave the room
+  const targetUser = users.get(memberCid);
+  if (targetUser && targetUser.socketId) {
+    const targetSocket = io.sockets.sockets.get(targetUser.socketId);
+    if (targetSocket) {
+      targetSocket.leave(`group_${groupId}`);
+      targetSocket.emit("groep:removed", { groupId, groupName: group.name });
+    }
   }
 });
 
-socket.on("group:invite:accept", (data) => {
-  const { groupId, memberCid, nickname, encryptedKey } = data;
+socket.on("groep:leave", (data) => {
+  const { groupId, userId } = data;
   const group = groups.get(groupId);
 
   if (!group) return;
 
-  if (group.members.some(m => m.cid === memberCid)) return;
+  // Find the member to get their nickname before removing
+  const leftMember = group.members.find(m => m.cid === userId);
 
-  const newMember = { cid: memberCid, nickname, role: 'MEMBER', encryptedKey };
-  group.members.push(newMember);
+  // 1. Remove from members
+  group.members = group.members.filter(m => m.cid !== userId);
 
-  // Save to DB
-  db.get('groups').find({ groupId }).assign({ members: group.members }).write();
-
-  // Join the user to the group room if online
-  const user = users.get(memberCid);
-  if (user && user.socketId) {
-    io.sockets.sockets.get(user.socketId)?.join(groupId);
+  // 2. Handle Admin Leaving
+  if (group.adminId === userId && group.members.length > 0) {
+    // Pass admin rights to the first remaining member
+    const newAdmin = group.members[0];
+    group.adminId = newAdmin.cid;
+    
+    // FETCH NEW ADMIN'S PUBLIC KEY to ensure E2EE continues working
+    const newAdminUser = users.get(newAdmin.cid);
+    if (newAdminUser && newAdminUser.publicKey) {
+      group.adminPublicKey = newAdminUser.publicKey;
+    }
   }
 
-  // Broadcast update to the group
-  io.to(groupId).emit("group:update", { 
-    type: 'added_to_group', 
+  // 3. Delete group if empty
+  if (group.members.length === 0) {
+    groups.delete(groupId);
+  }
+
+  // 4. Save & Sync
+  syncGroupsToS3();
+
+  // 5. Notify
+  socket.leave(`group_${groupId}`);
+  io.to(`group_${groupId}`).emit("group:update", { 
+    type: 'member_left', 
     groupId,
-    group, // Send the full group object
-    member: { cid: memberCid, nickname } 
+    memberCid: userId,
+    memberNickname: leftMember?.nickname || 'A member',
+    newAdminId: group.adminId
   });
-  
-  // Notify the user they joined successfully
-  if (user && user.socketId) {
-    io.to(user.socketId).emit("group:update", { type: 'added_to_group', group });
-  }
+
+  socket.emit("groep:left:success", { groupId });
 });
 
 socket.on("group:remove_member", (data) => {
@@ -884,59 +1123,105 @@ socket.on("group:promote_admin", (data) => {
   }
 });
 
-// ─── Send Message (Updated for Groups) ──────────────────
+// ─── Send Message (Strict Group Validation) ──────────
 socket.on("message:send", (data) => {
   const { roomId, groupId, message, senderCid, senderNickname } = data;
 
-  const targetId = groupId || roomId;
-  if (!targetId) return;
-
-  const messageObj = {
-    id: data.id || uuidv4(),
-    roomId: roomId || null,
-    groupId: groupId || null,
-    senderCid,
-    senderNickname: (senderNickname && senderNickname.trim()) ? senderNickname : `User-${senderCid.substring(0, 4)}`,
-    senderAvatar: data.senderAvatar || null,
-    message, // This is the ENCRYPTED payload from the client
-    timestamp: new Date().toISOString(),
-    status: "delivered",
-    reactions: [],
-  };
+  // Use the CID stored on the socket for absolute verification
+  const verifiedSenderCid = socket.cid || senderCid;
 
   if (groupId) {
     const group = groups.get(groupId);
-    if (!group) return;
-    if (!group.members.some(m => m.cid === senderCid)) return;
+    if (!group) return console.warn(`[Send] Group ${groupId} not found`);
+
+    // STRICT VALIDATION: Is the sender a member?
+    if (!group.members.some(m => m.cid === verifiedSenderCid)) {
+      console.error(`[Security] Unauthorized message attempt by ${verifiedSenderCid} in group ${groupId}`);
+      return socket.emit("message:error", { message: "You are not a member of this group" });
+    }
+
+    const messageObj = {
+      id: data.id || uuidv4(),
+      groupId,
+      senderCid: verifiedSenderCid,
+      senderNickname: senderNickname || `User-${verifiedSenderCid.substring(0, 4)}`,
+      senderAvatar: data.senderAvatar || null,
+      message, // Encrypted payload
+      timestamp: new Date().toISOString(),
+      status: "delivered"
+    };
 
     if (!group.messages) group.messages = [];
     group.messages.push(messageObj);
 
-    // Save to DB
-    db.get('groups').find({ groupId }).assign({ messages: group.messages }).write();
-  } else {
+    // Sync to S3
+    syncGroupsToS3();
+
+    // Broadcast ONLY to accepted members in the room
+    io.to(`group_${groupId}`).emit("message:received", messageObj);
+    
+  } else if (roomId) {
     const room = chatRooms.get(roomId);
     if (!room) return;
+
+    const messageObj = {
+      id: data.id || uuidv4(),
+      roomId,
+      senderCid: verifiedSenderCid,
+      senderNickname: senderNickname || `User-${verifiedSenderCid.substring(0, 4)}`,
+      senderAvatar: data.senderAvatar || null,
+      message, 
+      timestamp: new Date().toISOString(),
+      status: "delivered",
+      reactions: [],
+    };
+
     room.messages.push(messageObj);
-
-    // Save to DB
     db.get('chatRooms').find({ roomId }).assign({ messages: room.messages }).write();
-  }
 
-  // Broadcast to target (room or group)
-  io.to(targetId).emit("message:received", messageObj);
+    // Broadcast to room
+    io.to(roomId).emit("message:received", messageObj);
 
-  // Buffer for offline members in 1v1
-  if (roomId) {
-    const room = chatRooms.get(roomId);
-    const otherCid = room.userA === senderCid ? room.userB : room.userA;
+    // Buffer for offline members in 1v1
+    const otherCid = room.userA === verifiedSenderCid ? room.userB : room.userA;
     const targetUser = users.get(otherCid);
 
-    if (!targetUser || targetUser.status !== "online") {
-      const undelivered = pendingMessages.get(roomId) || [];
-      undelivered.push(messageObj);
-      pendingMessages.set(roomId, undelivered);
+    console.log(`[Push-Debug] Processing message in ${roomId}`);
+    console.log(`[Push-Debug] Sender: ${verifiedSenderCid}, Target: ${otherCid}`);
+
+    // If recipient is not actively in the socket room, send a push notification
+    const roomMembers = io.sockets.adapter.rooms.get(roomId);
+    const roomMemberCount = roomMembers ? roomMembers.size : 0;
+    const isRecipientInRoom = targetUser && targetUser.socketId && roomMembers && roomMembers.has(targetUser.socketId);
+
+    console.log(`[Push-Debug] Room ${roomId} has ${roomMemberCount} members. Recipient in room? ${isRecipientInRoom}`);
+
+    if (!isRecipientInRoom) {
+      // Buffer if offline
+      if (!targetUser || targetUser.status !== "online") {
+        console.log(`[Push-Debug] Target ${otherCid} is offline. Buffering message.`);
+        const undelivered = pendingMessages.get(roomId) || [];
+        undelivered.push(messageObj);
+        pendingMessages.set(roomId, undelivered);
+      }
+
+      // Send push notification
+      if (targetUser && targetUser.pushToken) {
+        console.log(`[Push-Debug] Triggering push to ${otherCid} (Token: ${targetUser.pushToken.substring(0, 10)}...)`);
+        const bodyPreview = typeof message === 'string' ? message : (message.text || "Sent an attachment");
+        sendPushNotification(
+          targetUser.pushToken,
+          senderNickname || "Locksy",
+          bodyPreview,
+          { roomId, senderCid: verifiedSenderCid, type: 'chat' }
+        );
+      } else {
+        console.log(`[Push-Debug] Cannot send push to ${otherCid}: ${!targetUser ? 'User not found' : 'No pushToken'}`);
+      }
     }
+
+
+
   }
 });
 
@@ -1017,6 +1302,42 @@ socket.on("message:opened", (data) => {
   console.log(`[Message] View-once message ${messageId} opened and scrubbed in room ${roomId}`);
 });
 
+// ─── Call Signaling (Push Notifications) ────────────
+socket.on("call:signal", (data) => {
+  const { toCid, callerName, callType, callId } = data;
+  const targetUser = users.get(toCid);
+
+  // 1. Deliver via Socket (Real-time foreground)
+  if (targetUser && targetUser.socketId) {
+    console.log(`[Call-Socket] Forwarding call signal to ${toCid}`);
+    io.to(targetUser.socketId).emit("call:signal", { 
+      type: 'call', 
+      callId, 
+      callerName, 
+      callType,
+      senderCid: socket.cid || data.fromCid,
+      fromCid: socket.cid || data.fromCid
+    });
+  }
+
+  // 2. Deliver via Push Notification (Background/Killed)
+  if (targetUser && targetUser.pushToken) {
+    console.log(`[Call-Push] Sending call invite push to ${toCid}`);
+    sendPushNotification(
+      targetUser.pushToken,
+      `Incoming ${callType} call`,
+      `${callerName} is calling you...`,
+      { 
+        type: 'call', 
+        callId, 
+        callerName, 
+        callType,
+        senderCid: socket.cid || data.fromCid 
+      }
+    );
+  }
+});
+
 // ─── Disconnect Handler ──────────────────────────────
 socket.on("disconnect", () => {
   const cid = userSockets.get(socket.id);
@@ -1047,12 +1368,27 @@ socket.on("room:getHistory", (data) => {
   }
 });
 
+socket.on("room:leave", (data) => {
+  const { roomId } = data;
+  if (chatRooms.has(roomId)) {
+    socket.leave(roomId);
+    console.log(`[Socket] Left 1v1 room: ${roomId}`);
+  } else if (groups.has(roomId)) {
+    socket.leave(`group_${roomId}`);
+    console.log(`[Socket] Left group room: group_${roomId}`);
+  }
+});
+
 socket.on("room:join", (data) => {
   const { roomId } = data;
-  if (chatRooms.has(roomId) || groups.has(roomId)) {
+  if (chatRooms.has(roomId)) {
     socket.join(roomId);
     socket.emit("room:joined", { success: true, roomId });
-    console.log(`[Socket] Socket ${socket.id} joined room/group: ${roomId}`);
+    console.log(`[Socket] Joined 1v1 room: ${roomId}`);
+  } else if (groups.has(roomId)) {
+    socket.join(`group_${roomId}`);
+    socket.emit("room:joined", { success: true, roomId });
+    console.log(`[Socket] Joined group room: group_${roomId}`);
   } else {
     socket.emit("room:error", { message: "Room or Group not found" });
   }

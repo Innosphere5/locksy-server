@@ -14,7 +14,8 @@ import {
   CreateMultipartUploadCommand,
   UploadPartCommand,
   CompleteMultipartUploadCommand,
-  AbortMultipartUploadCommand
+  AbortMultipartUploadCommand,
+  DeleteObjectCommand
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import admin from "firebase-admin";
@@ -107,6 +108,31 @@ const syncGroupsToS3 = async () => {
     console.error('[S3] Sync failed:', err);
   }
 };
+
+  // --- S3 Cleanup Helper ---
+  async function deleteS3Object(mediaId) {
+    try {
+      const media = db.get('media').find({ id: mediaId }).value();
+      if (!media) return;
+
+      console.log(`[S3-Cleanup] Deleting file: ${media.s3_key} (ID: ${mediaId})`);
+      
+      const command = new DeleteObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: media.s3_key,
+      });
+
+      await s3Client.send(command);
+      
+      // Remove from DB
+      db.get('media').remove({ id: mediaId }).write();
+      mediaRegistry.delete(mediaId);
+      
+      console.log(`[S3-Cleanup] Successfully deleted ${mediaId} from S3 and Registry`);
+    } catch (error) {
+      console.error(`[S3-Cleanup] Error deleting ${mediaId}:`, error);
+    }
+  };
 
 const loadGroupsFromS3 = async () => {
   try {
@@ -278,9 +304,9 @@ app.post("/api/media/upload-url", async (req, res) => {
   try {
     const { fileName, fileType, fileSize, userId } = req.body;
 
-    if (!fileName || !fileType || !userId) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
+    if (!fileName) return res.status(400).json({ error: "Missing required field: fileName" });
+    if (!fileType) return res.status(400).json({ error: "Missing required field: fileType" });
+    if (!userId) return res.status(400).json({ error: "Missing required field: userId" });
 
     // Validation: Reject > 200MB
     const MAX_SIZE = 200 * 1024 * 1024; // 200MB
@@ -292,7 +318,7 @@ app.post("/api/media/upload-url", async (req, res) => {
     const allowedTypes = ['image/', 'video/', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
     const isAllowed = allowedTypes.some(type => fileType.startsWith(type));
     if (!isAllowed) {
-      return res.status(400).json({ error: "File type not allowed" });
+      return res.status(400).json({ error: `File type not allowed: ${fileType}` });
     }
 
     const timestamp = Date.now();
@@ -312,7 +338,8 @@ app.post("/api/media/upload-url", async (req, res) => {
     });
 
     const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 300 });
-    const fileUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+    const region = process.env.AWS_REGION || 'us-east-1';
+    const fileUrl = `https://${BUCKET_NAME}.s3.${region}.amazonaws.com/${key}`;
 
     res.json({
       uploadUrl,
@@ -585,7 +612,8 @@ app.post("/api/media/multipart/complete", async (req, res) => {
     });
 
     await s3Client.send(command);
-    const fileUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+    const region = process.env.AWS_REGION || 'us-east-1';
+    const fileUrl = `https://${BUCKET_NAME}.s3.${region}.amazonaws.com/${key}`;
 
     res.json({ success: true, fileUrl, key });
   } catch (error) {
@@ -639,7 +667,13 @@ io.on("connection", (socket) => {
     console.log(`[Register] User ${cid} is now online`);
 
     socket.emit("register:success", { message: "Welcome back!", cid });
-    io.emit("user:status", { cid, status: "online", publicKey: userData.publicKey });
+    io.emit("user:status", { 
+      cid, 
+      status: "online", 
+      publicKey: userData.publicKey,
+      nickname: userData.nickname,
+      avatar: userData.avatar 
+    });
 
     // Check for pending requests
     const requests = pendingRequests.get(cid);
@@ -1223,7 +1257,7 @@ io.on("connection", (socket) => {
             targetUser.pushToken,
             senderNickname || "Locksy",
             bodyPreview,
-            { roomId, senderCid: verifiedSenderCid, type: 'chat' }
+            { roomId, senderCid: verifiedSenderCid, type: 'message' }
           );
         } else {
           console.log(`[Push-Debug] Cannot send push to ${otherCid}: ${!targetUser ? 'User not found' : 'No pushToken'}`);
@@ -1236,14 +1270,34 @@ io.on("connection", (socket) => {
   });
 
   // ─── Delete Message ──────────────────────────────────
-  socket.on("message:delete", (data) => {
+  socket.on("message:delete", async (data) => {
     const { roomId, messageId } = data;
     const room = chatRooms.get(roomId);
+    const group = groups.get(roomId);
 
-    if (!room) return;
+    const msgs = room ? room.messages : (group ? group.messages : []);
+    if (!msgs) return;
+
+    // Check for media to cleanup before filtering
+    const msgToDelete = msgs.find(m => m.id === messageId);
+    if (msgToDelete) {
+       // Extract mediaId from payload structure
+       const msgPayload = msgToDelete.message;
+       const mediaId = msgToDelete.media_id || (msgPayload && typeof msgPayload === 'object' ? msgPayload.media_id : null);
+       
+       if (mediaId) {
+         await deleteS3Object(mediaId);
+       }
+    }
 
     // Remove from room's memory history
-    room.messages = room.messages.filter(m => m.id !== messageId);
+    if (room) {
+      room.messages = room.messages.filter(m => m.id !== messageId);
+      db.get('chatRooms').find({ roomId }).assign({ messages: room.messages }).write();
+    } else if (group) {
+      group.messages = group.messages.filter(m => m.id !== messageId);
+      syncGroupsToS3();
+    }
 
     // Remove from pending offline queue if it was stuck there
     const pending = pendingMessages.get(roomId);
@@ -1253,6 +1307,42 @@ io.on("connection", (socket) => {
 
     // Broadcast delete event to all active clients in the room
     io.to(roomId).emit("message:deleted", { roomId, messageId });
+  });
+
+  socket.on("message:delete_bulk", async (data) => {
+    const { roomId, messageIds } = data;
+    if (!messageIds || !Array.isArray(messageIds)) return;
+
+    console.log(`[Delete-Bulk] Pruning ${messageIds.length} messages in ${roomId}`);
+
+    const room = chatRooms.get(roomId);
+    const group = groups.get(roomId);
+    const msgs = room ? room.messages : (group ? group.messages : []);
+    if (!msgs) return;
+
+    for (const messageId of messageIds) {
+      const msgToDelete = msgs.find(m => m.id === messageId);
+      if (msgToDelete) {
+         const msgPayload = msgToDelete.message;
+         const mediaId = msgToDelete.media_id || (msgPayload && typeof msgPayload === 'object' ? msgPayload.media_id : null);
+         if (mediaId) await deleteS3Object(mediaId);
+      }
+    }
+
+    if (room) {
+      room.messages = room.messages.filter(m => !messageIds.includes(m.id));
+      db.get('chatRooms').find({ roomId }).assign({ messages: room.messages }).write();
+    } else if (group) {
+      group.messages = group.messages.filter(m => !messageIds.includes(m.id));
+      syncGroupsToS3();
+    }
+
+    const pending = pendingMessages.get(roomId);
+    if (pending) {
+      pendingMessages.set(roomId, pending.filter(m => !messageIds.includes(m.id)));
+    }
+
+    io.to(roomId).emit("message:deleted_bulk", { roomId, messageIds });
   });
 
   // ─── React to Message ────────────────────────────────
@@ -1399,6 +1489,40 @@ io.on("connection", (socket) => {
       socket.join(`group_${roomId}`);
       socket.emit("room:joined", { success: true, roomId });
       console.log(`[Socket] Joined group room: group_${roomId}`);
+    } else {
+      socket.emit("room:error", { message: "Room or Group not found" });
+    }
+  });
+  
+  socket.on("room:clearHistory", async (data) => {
+    const { roomId } = data;
+    const room = chatRooms.get(roomId);
+    const group = groups.get(roomId);
+
+    console.log(`[Total-Wipe] Clearing all history and media for: ${roomId}`);
+
+    const msgs = room ? room.messages : (group ? group.messages : []);
+    if (msgs && msgs.length > 0) {
+      // WIPE ALL MEDIA FROM S3 BEFORE CLEARING
+      for (const msg of msgs) {
+         const msgPayload = msg.message;
+         const mediaId = msg.media_id || (msgPayload && typeof msgPayload === 'object' ? msgPayload.media_id : null);
+         if (mediaId) {
+           await deleteS3Object(mediaId);
+         }
+      }
+    }
+
+    if (room) {
+      room.messages = [];
+      db.get('chatRooms').find({ roomId }).assign({ messages: [] }).write();
+      console.log(`[Socket] 1v1 history cleared for room: ${roomId}`);
+      socket.emit("room:historyCleared", { success: true, roomId });
+    } else if (group) {
+      group.messages = [];
+      syncGroupsToS3();
+      console.log(`[Socket] Group history cleared for room: ${roomId}`);
+      socket.emit("room:historyCleared", { success: true, roomId });
     } else {
       socket.emit("room:error", { message: "Room or Group not found" });
     }

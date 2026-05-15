@@ -45,7 +45,9 @@ db.defaults({
   chatRooms: [],
   groups: [],
   media: [],
-  groupInvites: []
+  groupInvites: [],
+  groupUnreadMessages: [],
+  userMutes: {}
 }).write();
 
 const app = Express();
@@ -87,53 +89,111 @@ const pendingRequests = new Map();
 const groups = new Map();
 const groupInvites = new Map();
 const mediaRegistry = new Map();
+const groupUnreadMessages = new Map(); // cid -> { groupId: [messageIds] }
+const userMutes = new Map(); // `${cid}_${roomId}` -> until_timestamp
+const activeCalls = new Map(); // callId -> { callerId, receiverId, status }
 
-// S3 Persistence Helper for Groups
-const syncGroupsToS3 = async () => {
-  try {
-    const groupsArray = Array.from(groups.values());
 
-    // 1. Sync to local DB for fast fallback
-    db.set('groups', groupsArray).write();
-
-    // 2. Sync to S3 for remote persistence
-    await s3Client.send(new PutObjectCommand({
-      Bucket: BUCKET_NAME,
-      Key: 'persistence/groups.json',
-      Body: JSON.stringify(groupsArray),
-      ContentType: 'application/json'
-    }));
-    console.log('[S3] Groups synced to bucket and local DB');
-  } catch (err) {
-    console.error('[S3] Sync failed:', err);
+// S3 Persistence Helper for Chat Rooms (1v1)
+// --- Debounce Mechanism for S3 Sync ---
+const syncDebounces = new Map();
+const debounceSync = (key, fn, delay = 2000) => {
+  if (syncDebounces.has(key)) {
+    clearTimeout(syncDebounces.get(key));
   }
+  const timeout = setTimeout(() => {
+    fn();
+    syncDebounces.delete(key);
+  }, delay);
+  syncDebounces.set(key, timeout);
 };
 
-  // --- S3 Cleanup Helper ---
-  async function deleteS3Object(mediaId) {
+const syncMutesToDb = () => {
+  debounceSync('userMutes', () => {
+    const mutesObj = Object.fromEntries(userMutes);
+    db.set('userMutes', mutesObj).write();
+  }, 1000);
+};
+
+const syncChatRoomsToS3 = async () => {
+  debounceSync('chatRooms', async () => {
     try {
-      const media = db.get('media').find({ id: mediaId }).value();
-      if (!media) return;
-
-      console.log(`[S3-Cleanup] Deleting file: ${media.s3_key} (ID: ${mediaId})`);
-      
-      const command = new DeleteObjectCommand({
+      const roomsArray = Array.from(chatRooms.values());
+      db.set('chatRooms', roomsArray).write();
+      await s3Client.send(new PutObjectCommand({
         Bucket: BUCKET_NAME,
-        Key: media.s3_key,
-      });
-
-      await s3Client.send(command);
-      
-      // Remove from DB
-      db.get('media').remove({ id: mediaId }).write();
-      mediaRegistry.delete(mediaId);
-      
-      console.log(`[S3-Cleanup] Successfully deleted ${mediaId} from S3 and Registry`);
-    } catch (error) {
-      console.error(`[S3-Cleanup] Error deleting ${mediaId}:`, error);
+        Key: 'persistence/chatRooms.json',
+        Body: JSON.stringify(roomsArray),
+        ContentType: 'application/json'
+      }));
+      console.log('[S3] ChatRooms synced to bucket');
+    } catch (err) {
+      console.error('[S3] ChatRoom Sync failed:', err);
     }
-  };
+  });
+};
 
+const syncGroupsToS3 = async () => {
+  debounceSync('groups', async () => {
+    try {
+      const groupsArray = Array.from(groups.values());
+      db.set('groups', groupsArray).write();
+      await s3Client.send(new PutObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: 'persistence/groups.json',
+        Body: JSON.stringify(groupsArray),
+        ContentType: 'application/json'
+      }));
+      console.log('[S3] Groups synced to bucket');
+    } catch (err) {
+      console.error('[S3] Group Sync failed:', err);
+    }
+  });
+};
+
+const syncMediaToS3 = async () => {
+  debounceSync('media', async () => {
+    try {
+      const mediaArray = Array.from(mediaRegistry.values());
+      db.set('media', mediaArray).write();
+      await s3Client.send(new PutObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: 'persistence/media.json',
+        Body: JSON.stringify(mediaArray),
+        ContentType: 'application/json'
+      }));
+      console.log('[S3] Media metadata synced to bucket');
+    } catch (err) {
+      console.error('[S3] Media Sync failed:', err);
+    }
+  });
+};
+
+// --- S3 Cleanup Helper ---
+async function deleteS3Object(mediaId) {
+  try {
+    const media = db.get('media').find({ id: mediaId }).value();
+    if (!media) return;
+
+    console.log(`[S3-Cleanup] Deleting file: ${media.s3_key} (ID: ${mediaId})`);
+
+    const command = new DeleteObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: media.s3_key,
+    });
+
+    await s3Client.send(command);
+
+    // Remove from DB
+    db.get('media').remove({ id: mediaId }).write();
+    mediaRegistry.delete(mediaId);
+    syncMediaToS3();
+
+    console.log(`[S3-Cleanup] Successfully deleted ${mediaId} from S3 and Registry`);
+  } catch (error) {
+    console.error(`[S3-Cleanup] Error deleting ${mediaId}:`, error);
+  }
+};
 const loadGroupsFromS3 = async () => {
   try {
     console.log('[S3] Attempting to load groups from bucket...');
@@ -162,6 +222,60 @@ const loadGroupsFromS3 = async () => {
     console.log(`[Startup] Loaded ${groups.size} groups from local persistent store`);
   }
 };
+const loadChatRoomsFromS3 = async () => {
+  try {
+    console.log('[S3] Attempting to load chatRooms from bucket...');
+    const command = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: 'persistence/chatRooms.json',
+    });
+
+    const response = await s3Client.send(command);
+    const stream = response.Body;
+    const data = await new Promise((resolve, reject) => {
+      const chunks = [];
+      stream.on('data', chunk => chunks.push(chunk));
+      stream.on('error', reject);
+      stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    });
+
+    const roomsArray = JSON.parse(data);
+    roomsArray.forEach(r => chatRooms.set(r.roomId, r));
+    console.log(`✅ [S3] Successfully loaded ${chatRooms.size} chatRooms from bucket`);
+  } catch (err) {
+    console.warn('[S3] ChatRooms load failed (using local fallback):', err.message);
+    const dbRooms = db.get('chatRooms').value() || [];
+    dbRooms.forEach(r => chatRooms.set(r.roomId, r));
+    console.log(`[Startup] Loaded ${chatRooms.size} chatRooms from local persistent store`);
+  }
+};
+
+const loadMediaFromS3 = async () => {
+  try {
+    console.log('[S3] Attempting to load media from bucket...');
+    const command = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: 'persistence/media.json',
+    });
+
+    const response = await s3Client.send(command);
+    const stream = response.Body;
+    const data = await new Promise((resolve, reject) => {
+      const chunks = [];
+      stream.on('data', chunk => chunks.push(chunk));
+      stream.on('error', reject);
+      stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    });
+
+    const mediaArray = JSON.parse(data);
+    mediaArray.forEach(m => mediaRegistry.set(m.id, m));
+    console.log(`✅ [S3] Successfully loaded ${mediaRegistry.size} media items from bucket`);
+  } catch (err) {
+    console.warn('[S3] Media load failed (using local fallback):', err.message);
+    const dbMedia = db.get('media').value() || [];
+    dbMedia.forEach(m => mediaRegistry.set(m.id, m));
+  }
+};
 
 // LOAD DATA ON STARTUP
 const dbUsers = db.get('users').value() || [];
@@ -169,6 +283,8 @@ dbUsers.forEach(u => users.set(u.cid, u));
 
 // Await S3 load (with local DB fallback)
 await loadGroupsFromS3();
+await loadChatRoomsFromS3();
+await loadMediaFromS3();
 
 // Sync Maps with DB on startup
 const loadFromDb = () => {
@@ -191,7 +307,15 @@ const loadFromDb = () => {
     groupInvites.set(inv.cid, existing);
   });
 
-  console.log(`[DB] Loaded ${users.size} users, ${groups.size} groups, ${chatRooms.size} rooms, ${mediaRegistry.size} media items, ${groupInvites.size} users with invites`);
+  const dbGroupUnread = db.get('groupUnreadMessages').value() || [];
+  dbGroupUnread.forEach(entry => {
+    groupUnreadMessages.set(entry.cid, entry.unread);
+  });
+
+  const dbMutes = db.get('userMutes').value() || {};
+  Object.keys(dbMutes).forEach(k => userMutes.set(k, dbMutes[k]));
+
+  console.log(`[DB] Loaded ${users.size} users, ${groups.size} groups, ${chatRooms.size} rooms, ${mediaRegistry.size} media items, ${groupInvites.size} users with invites, ${groupUnreadMessages.size} users with unread group msgs, ${userMutes.size} active mutes`);
 };
 
 loadFromDb();
@@ -382,6 +506,7 @@ app.post("/api/media/save", (req, res) => {
       db.set('media', []).write();
     }
     db.get('media').push(mediaObj).write();
+    syncMediaToS3();
 
     res.json({ success: true, media: mediaObj });
   } catch (error) {
@@ -453,9 +578,16 @@ app.get("/api/media/e2ee/download-url", async (req, res) => {
       return res.status(400).json({ error: "Missing media_id" });
     }
 
-    // Look up metadata in DB
-    const media = db.get('media').find({ id: media_id }).value();
+    // Look up metadata in DB or Registry (Try Registry first for speed/freshness)
+    let media = mediaRegistry.get(media_id);
+    
     if (!media) {
+      // Fallback: Search DB by ID or S3 Key (to handle both formats)
+      media = db.get('media').find(m => m.id === media_id || m.s3_key === media_id).value();
+    }
+
+    if (!media) {
+      console.warn(`[E2EE-Media] 404: Media metadata not found for ID: ${media_id}`);
       return res.status(404).json({ error: "Media metadata not found" });
     }
 
@@ -525,6 +657,7 @@ app.post("/api/media/e2ee/save-metadata", (req, res) => {
       db.set('media', []).write();
     }
     db.get('media').push(mediaObj).write();
+    syncMediaToS3();
 
     console.log(`[E2EE-Media] Metadata saved for ${file_name} (ID: ${mediaId})`);
 
@@ -635,6 +768,17 @@ io.on("connection", (socket) => {
 
     if (!cid) return socket.emit("register:error", { message: "CID is required" });
 
+    // Force Single Session: Disconnect any existing socket for this CID
+    const oldUser = users.get(cid);
+    if (oldUser && oldUser.socketId && oldUser.socketId !== socket.id) {
+      console.log(`[Register] User ${cid} already has an active socket ${oldUser.socketId}. Disconnecting old session.`);
+      const oldSocket = io.sockets.sockets.get(oldUser.socketId);
+      if (oldSocket) {
+        oldSocket.emit("error", { message: "New login detected. You have been disconnected." });
+        oldSocket.disconnect(true);
+      }
+    }
+
     // Store CID on socket for validation in later events
     socket.cid = cid;
 
@@ -667,12 +811,12 @@ io.on("connection", (socket) => {
     console.log(`[Register] User ${cid} is now online`);
 
     socket.emit("register:success", { message: "Welcome back!", cid });
-    io.emit("user:status", { 
-      cid, 
-      status: "online", 
+    io.emit("user:status", {
+      cid,
+      status: "online",
       publicKey: userData.publicKey,
       nickname: userData.nickname,
-      avatar: userData.avatar 
+      avatar: userData.avatar
     });
 
     // Check for pending requests
@@ -681,6 +825,21 @@ io.on("connection", (socket) => {
       requests.forEach(req => socket.emit("contact:request", req));
       pendingRequests.delete(cid); // Clear after delivery
     }
+
+    // ─── Contact Mute Event (NEW) ─────────────────────────
+    socket.on("contact:mute", (data) => {
+      const { cid: targetCid, roomId, until } = data;
+      const verifiedCid = socket.cid || targetCid;
+      const key = `${verifiedCid}_${roomId}`;
+      if (until === null || until === 0) {
+        userMutes.delete(key);
+        console.log(`[Mute] User ${verifiedCid} unmuted ${roomId}`);
+      } else {
+        userMutes.set(key, until);
+        console.log(`[Mute] User ${verifiedCid} muted ${roomId} until ${new Date(until).toISOString()}`);
+      }
+      syncMutesToDb();
+    });
 
     // Check for pending group invites (NEW: groep:invite)
     const invites = groupInvites.get(cid);
@@ -720,6 +879,27 @@ io.on("connection", (socket) => {
         }
       }
     });
+
+    // Deliver buffered group messages
+    const unreadMap = groupUnreadMessages.get(cid);
+    if (unreadMap) {
+      Object.keys(unreadMap).forEach(groupId => {
+        const group = groups.get(groupId);
+        if (group && group.messages) {
+          const messageIds = unreadMap[groupId];
+          messageIds.forEach(msgId => {
+            const msg = group.messages.find(m => m.id === msgId);
+            if (msg) {
+              socket.emit("message:received", msg);
+            }
+          });
+        }
+      });
+      groupUnreadMessages.delete(cid);
+      // Persist cleanup
+      const allUnread = Array.from(groupUnreadMessages.entries()).map(([cid, unread]) => ({ cid, unread }));
+      db.set('groupUnreadMessages', allUnread).write();
+    }
   });
 
   // ─── Search Contact (Discovery Only) ──────────────────
@@ -809,8 +989,8 @@ io.on("connection", (socket) => {
         status: "active",
       };
       chatRooms.set(roomId, newRoom);
-      // Save to DB
-      db.get('chatRooms').push(newRoom).write();
+      // Save to S3
+      syncChatRoomsToS3();
     }
 
     const roomData = {
@@ -854,8 +1034,8 @@ io.on("connection", (socket) => {
         status: "active",
       };
       chatRooms.set(roomId, newRoom);
-      // Save to DB
-      db.get('chatRooms').push(newRoom).write();
+      // Save to S3
+      syncChatRoomsToS3();
     }
 
     const roomData = {
@@ -1192,7 +1372,7 @@ io.on("connection", (socket) => {
         senderAvatar: data.senderAvatar || null,
         message, // Encrypted payload
         timestamp: new Date().toISOString(),
-        status: "delivered"
+        status: "sent" // INITIAL STATUS
       };
 
       if (!group.messages) group.messages = [];
@@ -1201,8 +1381,51 @@ io.on("connection", (socket) => {
       // Sync to S3
       syncGroupsToS3();
 
-      // Broadcast ONLY to accepted members in the room
-      io.to(`group_${groupId}`).emit("message:received", messageObj);
+      // 1. ACK to sender
+      socket.emit("message:sent", { id: messageObj.id, tempId: data.id, groupId });
+
+      // 2. Broadcast ONLY to members in the room
+      const roomName = `group_${groupId}`;
+      io.to(roomName).emit("message:received", messageObj);
+
+      // 3. Buffer for members NOT in the room
+      const activeSocketIds = io.sockets.adapter.rooms.get(roomName) || new Set();
+      group.members.forEach(member => {
+        if (member.cid === verifiedSenderCid) return;
+
+        const memberUser = users.get(member.cid);
+        const isActive = memberUser && memberUser.socketId && activeSocketIds.has(memberUser.socketId);
+
+        if (!isActive) {
+          // Buffer it
+          const userUnread = groupUnreadMessages.get(member.cid) || {};
+          const groupMsgs = userUnread[groupId] || [];
+          groupMsgs.push(messageObj.id);
+          userUnread[groupId] = groupMsgs;
+          groupUnreadMessages.set(member.cid, userUnread);
+
+          // Persist unread map to DB
+          const allUnread = Array.from(groupUnreadMessages.entries()).map(([cid, unread]) => ({ cid, unread }));
+          db.set('groupUnreadMessages', allUnread).write();
+
+          // Send push notification if they have a token
+          if (memberUser && memberUser.pushToken) {
+            const targetMuteKey = `${member.cid}_${groupId}`;
+            const muteUntil = userMutes.get(targetMuteKey);
+            if (muteUntil && muteUntil > Date.now()) {
+              console.log(`[Push-Debug] Target ${member.cid} has muted group ${groupId}. Skipping push.`);
+            } else {
+              const bodyPreview = typeof message === 'string' ? message : (message.text || "Sent an attachment");
+              sendPushNotification(
+                memberUser.pushToken,
+                `${group.name}: ${senderNickname || "Locksy"}`,
+                bodyPreview,
+                { groupId: String(groupId), senderCid: String(verifiedSenderCid), type: 'message' }
+              );
+            }
+          }
+        }
+      });
 
     } else if (roomId) {
       const room = chatRooms.get(roomId);
@@ -1216,14 +1439,17 @@ io.on("connection", (socket) => {
         senderAvatar: data.senderAvatar || null,
         message,
         timestamp: new Date().toISOString(),
-        status: "delivered",
+        status: "sent",
         reactions: [],
       };
 
       room.messages.push(messageObj);
-      db.get('chatRooms').find({ roomId }).assign({ messages: room.messages }).write();
+      syncChatRoomsToS3();
 
-      // Broadcast to room
+      // 1. ACK to sender
+      socket.emit("message:sent", { id: messageObj.id, tempId: data.id, roomId });
+
+      // 2. Broadcast to room
       io.to(roomId).emit("message:received", messageObj);
 
       // Buffer for offline members in 1v1
@@ -1251,14 +1477,20 @@ io.on("connection", (socket) => {
 
         // Send push notification
         if (targetUser && targetUser.pushToken) {
-          console.log(`[Push-Debug] Triggering push to ${otherCid} (Token: ${targetUser.pushToken.substring(0, 10)}...)`);
-          const bodyPreview = typeof message === 'string' ? message : (message.text || "Sent an attachment");
-          sendPushNotification(
-            targetUser.pushToken,
-            senderNickname || "Locksy",
-            bodyPreview,
-            { roomId, senderCid: verifiedSenderCid, type: 'message' }
-          );
+          const targetMuteKey = `${otherCid}_${roomId}`;
+          const muteUntil = userMutes.get(targetMuteKey);
+          if (muteUntil && muteUntil > Date.now()) {
+            console.log(`[Push-Debug] Target ${otherCid} has muted room ${roomId}. Skipping push.`);
+          } else {
+            console.log(`[Push-Debug] Triggering push to ${otherCid} (Token: ${targetUser.pushToken.substring(0, 10)}...)`);
+            const bodyPreview = typeof message === 'string' ? message : (message.text || "Sent an attachment");
+            sendPushNotification(
+              targetUser.pushToken,
+              senderNickname || "Locksy",
+              bodyPreview,
+              { roomId: String(roomId), senderCid: String(verifiedSenderCid), type: 'message' }
+            );
+          }
         } else {
           console.log(`[Push-Debug] Cannot send push to ${otherCid}: ${!targetUser ? 'User not found' : 'No pushToken'}`);
         }
@@ -1266,6 +1498,61 @@ io.on("connection", (socket) => {
 
 
 
+    }
+  });
+
+  // ─── Message Status Updates (NEW) ────────────────────
+  socket.on("message:delivered", (data) => {
+    const { roomId, groupId, messageId, receiverCid } = data;
+    console.log(`[Status] Message ${messageId} delivered to ${receiverCid}`);
+
+    if (groupId) {
+      const group = groups.get(groupId);
+      if (group && group.messages) {
+        const msg = group.messages.find(m => m.id === messageId);
+        if (msg && msg.status !== 'read') {
+          msg.status = 'delivered';
+          syncGroupsToS3();
+          io.to(`group_${groupId}`).emit("message:status:update", { groupId, messageId, status: 'delivered' });
+        }
+      }
+    } else if (roomId) {
+      const room = chatRooms.get(roomId);
+      if (room && room.messages) {
+        const msg = room.messages.find(m => m.id === messageId);
+        if (msg && msg.status !== 'read') {
+          msg.status = 'delivered';
+          syncChatRoomsToS3();
+          io.to(roomId).emit("message:status:update", { roomId, messageId, status: 'delivered' });
+        }
+      }
+    }
+  });
+
+  socket.on("message:read", (data) => {
+    const { roomId, groupId, messageId, receiverCid } = data;
+    console.log(`[Status] Message ${messageId} read by ${receiverCid}`);
+
+    if (groupId) {
+      const group = groups.get(groupId);
+      if (group && group.messages) {
+        const msg = group.messages.find(m => m.id === messageId);
+        if (msg) {
+          msg.status = 'read';
+          syncGroupsToS3();
+          io.to(`group_${groupId}`).emit("message:status:update", { groupId, messageId, status: 'read' });
+        }
+      }
+    } else if (roomId) {
+      const room = chatRooms.get(roomId);
+      if (room && room.messages) {
+        const msg = room.messages.find(m => m.id === messageId);
+        if (msg) {
+          msg.status = 'read';
+          syncChatRoomsToS3();
+          io.to(roomId).emit("message:status:update", { roomId, messageId, status: 'read' });
+        }
+      }
     }
   });
 
@@ -1281,19 +1568,19 @@ io.on("connection", (socket) => {
     // Check for media to cleanup before filtering
     const msgToDelete = msgs.find(m => m.id === messageId);
     if (msgToDelete) {
-       // Extract mediaId from payload structure
-       const msgPayload = msgToDelete.message;
-       const mediaId = msgToDelete.media_id || (msgPayload && typeof msgPayload === 'object' ? msgPayload.media_id : null);
-       
-       if (mediaId) {
-         await deleteS3Object(mediaId);
-       }
+      // Extract mediaId from payload structure
+      const msgPayload = msgToDelete.message;
+      const mediaId = msgToDelete.media_id || (msgPayload && typeof msgPayload === 'object' ? msgPayload.media_id : null);
+
+      if (mediaId) {
+        await deleteS3Object(mediaId);
+      }
     }
 
     // Remove from room's memory history
     if (room) {
       room.messages = room.messages.filter(m => m.id !== messageId);
-      db.get('chatRooms').find({ roomId }).assign({ messages: room.messages }).write();
+      syncChatRoomsToS3();
     } else if (group) {
       group.messages = group.messages.filter(m => m.id !== messageId);
       syncGroupsToS3();
@@ -1323,15 +1610,15 @@ io.on("connection", (socket) => {
     for (const messageId of messageIds) {
       const msgToDelete = msgs.find(m => m.id === messageId);
       if (msgToDelete) {
-         const msgPayload = msgToDelete.message;
-         const mediaId = msgToDelete.media_id || (msgPayload && typeof msgPayload === 'object' ? msgPayload.media_id : null);
-         if (mediaId) await deleteS3Object(mediaId);
+        const msgPayload = msgToDelete.message;
+        const mediaId = msgToDelete.media_id || (msgPayload && typeof msgPayload === 'object' ? msgPayload.media_id : null);
+        if (mediaId) await deleteS3Object(mediaId);
       }
     }
 
     if (room) {
       room.messages = room.messages.filter(m => !messageIds.includes(m.id));
-      db.get('chatRooms').find({ roomId }).assign({ messages: room.messages }).write();
+      syncChatRoomsToS3();
     } else if (group) {
       group.messages = group.messages.filter(m => !messageIds.includes(m.id));
       syncGroupsToS3();
@@ -1402,39 +1689,156 @@ io.on("connection", (socket) => {
     console.log(`[Message] View-once message ${messageId} opened and scrubbed in room ${roomId}`);
   });
 
-  // ─── Call Signaling (Push Notifications) ────────────
-  socket.on("call:signal", (data) => {
-    const { toCid, callerName, callType, callId } = data;
-    const targetUser = users.get(toCid);
+  // ─── Call Signaling (WebRTC + Push) ────────────────
+  socket.on("call:offer", (data) => {
+    const { callId, receiverId, offerSDP, callType, callerName } = data;
+    const callerId = socket.cid || data.callerId;
+    const targetUser = users.get(receiverId);
 
-    // 1. Deliver via Socket (Real-time foreground)
-    if (targetUser && targetUser.socketId) {
-      console.log(`[Call-Socket] Forwarding call signal to ${toCid}`);
-      io.to(targetUser.socketId).emit("call:signal", {
-        type: 'call',
+    console.log(`[Call] Offer from ${callerId} to ${receiverId} (Type: ${callType})`);
+
+    if (callerId === receiverId) {
+      console.warn(`[Call] Self-call attempt by ${callerId}`);
+      return socket.emit("call:busy", { callId, message: "Self-calling not supported" });
+    }
+
+    if (!targetUser) {
+      return socket.emit("call:error", { message: "Target user not found" });
+    }
+
+    // 1. Check if receiver is busy
+    let isBusy = false;
+    activeCalls.forEach((call) => {
+      if (call.receiverId === receiverId || call.callerId === receiverId) {
+        if (call.status !== 'ended') isBusy = true;
+      }
+    });
+
+    if (isBusy) {
+      console.log(`[Call] Receiver ${receiverId} is busy`);
+      return socket.emit("call:busy", { receiverId, callId });
+    }
+
+    // 2. Track the call session
+    activeCalls.set(callId, {
+      callerId,
+      receiverId,
+      status: 'calling',
+      startTime: Date.now()
+    });
+
+    // 3. Forward offer via Socket (Real-time foreground)
+    if (targetUser.socketId && targetUser.socketId !== socket.id) {
+      io.to(targetUser.socketId).emit("call:offer", {
         callId,
+        callerId,
         callerName,
-        callType,
-        senderCid: socket.cid || data.fromCid,
-        fromCid: socket.cid || data.fromCid
+        offerSDP,
+        callType
       });
     }
 
-    // 2. Deliver via Push Notification (Background/Killed)
-    if (targetUser && targetUser.pushToken) {
-      console.log(`[Call-Push] Sending call invite push to ${toCid}`);
+    // 4. Send Push Notification (Background/Wake-up)
+    if (targetUser.pushToken) {
       sendPushNotification(
         targetUser.pushToken,
         `Incoming ${callType} call`,
-        `${callerName} is calling you...`,
+        `${callerName || 'Someone'} is calling you...`,
         {
-          type: 'call',
-          callId,
-          callerName,
-          callType,
-          senderCid: socket.cid || data.fromCid
+          type: 'call_offer',
+          callId: String(callId),
+          callerId: String(callerId || ''),
+          callerName: String(callerName || 'Locksy User'),
+          callType: String(callType)
         }
       );
+    }
+  });
+
+  socket.on("call:ringing", (data) => {
+    const { callId, callerId } = data;
+    const targetUser = users.get(callerId);
+    if (targetUser && targetUser.socketId) {
+      io.to(targetUser.socketId).emit("call:ringing", { callId });
+    }
+  });
+
+  socket.on("call:answer", (data) => {
+    const { callId, callerId, answerSDP } = data;
+    const receiverId = socket.cid;
+    const targetUser = users.get(callerId);
+
+    console.log(`[Call] Answer from ${receiverId} to ${callerId}`);
+
+    const call = activeCalls.get(callId);
+    if (call) {
+      call.status = 'connected';
+    }
+
+    if (targetUser && targetUser.socketId) {
+      io.to(targetUser.socketId).emit("call:answer", {
+        callId,
+        receiverId,
+        answerSDP
+      });
+    }
+  });
+
+  socket.on("call:ice-candidate", (data) => {
+    const { callId, receiverId, candidate } = data;
+    const targetUser = users.get(receiverId);
+
+    if (targetUser && targetUser.socketId) {
+      io.to(targetUser.socketId).emit("call:ice-candidate", {
+        callId,
+        senderId: socket.cid,
+        candidate
+      });
+    }
+  });
+
+  socket.on("call:reject", (data) => {
+    const { callId, callerId, reason } = data;
+    const targetUser = users.get(callerId);
+
+    console.log(`[Call] Rejected by ${socket.cid} (Reason: ${reason})`);
+
+    activeCalls.delete(callId);
+
+    if (targetUser && targetUser.socketId) {
+      io.to(targetUser.socketId).emit("call:rejected", {
+        callId,
+        receiverId: socket.cid,
+        reason
+      });
+    }
+  });
+
+  socket.on("call:end", (data) => {
+    const { callId, otherId } = data;
+    const targetUser = users.get(otherId);
+
+    console.log(`[Call] Ended by ${socket.cid} for ${callId}`);
+
+    activeCalls.delete(callId);
+
+    if (targetUser && targetUser.socketId) {
+      io.to(targetUser.socketId).emit("call:ended", {
+        callId,
+        senderId: socket.cid
+      });
+    }
+  });
+
+  socket.on("call:busy", (data) => {
+    const { callId, callerId } = data;
+    const targetUser = users.get(callerId);
+
+    if (targetUser && targetUser.socketId) {
+      io.to(targetUser.socketId).emit("call:busy", {
+        callId,
+        receiverId: socket.cid
+      });
     }
   });
 
@@ -1450,6 +1854,21 @@ io.on("connection", (socket) => {
         io.emit("user:status", { cid, status: "offline" });
       }
       userSockets.delete(socket.id);
+
+      // Clean up any active calls this user was in
+      for (const [callId, call] of activeCalls) {
+        if (call.callerId === cid || call.receiverId === cid) {
+          console.log(`[Call-Cleanup] Cleaning up active call ${callId} due to disconnect of ${cid}`);
+          activeCalls.delete(callId);
+          
+          // Notify the other party if still connected
+          const otherId = call.callerId === cid ? call.receiverId : call.callerId;
+          const otherUser = users.get(otherId);
+          if (otherUser && otherUser.socketId) {
+            io.to(otherUser.socketId).emit("call:ended", { callId, reason: "Partner disconnected" });
+          }
+        }
+      }
     }
   });
 
@@ -1493,25 +1912,13 @@ io.on("connection", (socket) => {
       socket.emit("room:error", { message: "Room or Group not found" });
     }
   });
-  
+
   socket.on("room:clearHistory", async (data) => {
     const { roomId } = data;
     const room = chatRooms.get(roomId);
     const group = groups.get(roomId);
 
-    console.log(`[Total-Wipe] Clearing all history and media for: ${roomId}`);
-
-    const msgs = room ? room.messages : (group ? group.messages : []);
-    if (msgs && msgs.length > 0) {
-      // WIPE ALL MEDIA FROM S3 BEFORE CLEARING
-      for (const msg of msgs) {
-         const msgPayload = msg.message;
-         const mediaId = msg.media_id || (msgPayload && typeof msgPayload === 'object' ? msgPayload.media_id : null);
-         if (mediaId) {
-           await deleteS3Object(mediaId);
-         }
-      }
-    }
+    console.log(`[Soft-Clear] Clearing room messages for: ${roomId} (Preserving S3 objects)`);
 
     if (room) {
       room.messages = [];

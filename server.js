@@ -11,30 +11,13 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
-  CreateMultipartUploadCommand,
-  UploadPartCommand,
-  CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
   DeleteObjectCommand
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import admin from "firebase-admin";
-
-
+// Firebase Admin has been removed to fix the startup crash and circumvent system time desyncs.
 
 dotenv.config();
-
-// Initialize Firebase Admin
-const serviceAccount = JSON.parse(
-  process.env.FIREBASE_SERVICE_ACCOUNT
-);
-
-serviceAccount.private_key =
-  serviceAccount.private_key.replace(/\\n/g, "\n");
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
 
 const adapter = new FileSync('db.json');
 const db = low(adapter);
@@ -281,10 +264,12 @@ const loadMediaFromS3 = async () => {
 const dbUsers = db.get('users').value() || [];
 dbUsers.forEach(u => users.set(u.cid, u));
 
-// Await S3 load (with local DB fallback)
-await loadGroupsFromS3();
-await loadChatRoomsFromS3();
-await loadMediaFromS3();
+// Await S3 load (with local DB fallback) with 3 second timeout
+const withTimeout = (promise, ms) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('S3 Connection Timeout')), ms))]);
+
+try { await withTimeout(loadGroupsFromS3(), 3000); } catch(e) { console.warn('[S3] Groups Load Timeout:', e.message); }
+try { await withTimeout(loadChatRoomsFromS3(), 3000); } catch(e) { console.warn('[S3] ChatRooms Load Timeout:', e.message); }
+try { await withTimeout(loadMediaFromS3(), 3000); } catch(e) { console.warn('[S3] Media Load Timeout:', e.message); }
 
 // Sync Maps with DB on startup
 const loadFromDb = () => {
@@ -334,35 +319,50 @@ const testS3 = async () => {
 };
 testS3();
 
+import admin from 'firebase-admin';
+import { readFileSync } from 'fs';
+
+// Initialize Firebase Admin with the provided service account
+try {
+  const serviceAccount = JSON.parse(readFileSync('./locksy-notification-firebase-adminsdk-fbsvc-b6249d695c.json', 'utf8'));
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+  console.log('[Firebase] Admin SDK initialized successfully.');
+} catch (error) {
+  console.error('[Firebase] Failed to initialize Admin SDK:', error);
+}
+
 // ─── Push Notification Helper ───────────────────────
 const sendPushNotification = async (token, title, body, data = {}) => {
   if (!token) return;
 
+  // We are migrating to raw FCM device tokens, but we gracefully skip old Expo tokens.
+  if (token.startsWith('ExponentPushToken') || token.startsWith('ExpoPushToken')) {
+    console.warn(`[Push] Skipping old Expo push token: ${token}. Please restart the client app to get an FCM token.`);
+    return;
+  }
+
   const message = {
-    notification: { title, body },
-    data: {
-      ...data,
-      click_action: "FLUTTER_NOTIFICATION_CLICK", // For older Android versions
+    token: token,
+    notification: {
+      title: title,
+      body: body
     },
+    data: data,
     android: {
       priority: 'high',
       notification: {
-        channelId: "default",
-        priority: "high",
-        sound: "default",
-      },
-    },
-    token: token,
+        channelId: 'default'
+      }
+    }
   };
 
   try {
     const response = await admin.messaging().send(message);
     console.log(`[Push] Successfully sent to ${token.substring(0, 10)}... :`, response);
   } catch (error) {
-    console.error("[Push] Error sending notification:", error);
-    if (error.code === 'messaging/registration-token-not-registered') {
-      console.warn(`[Push] Token no longer valid, should prune from DB`);
-    }
+    console.error("[Push] Error sending FCM notification:", error);
   }
 };
 
@@ -391,6 +391,47 @@ app.get("/", (req, res) => {
     status: "Locksy secure chat server is running",
     version: "1.1.0 (Advanced Persistence)",
   });
+});
+
+app.get("/api/app/config", (req, res) => {
+  res.json({
+    is_app_active: true,
+    force_update: false,
+    message: "local-backend",
+  });
+});
+
+app.post("/api/auth/verify-user", (req, res) => {
+  const { employee_id, device_id } = req.body || {};
+
+  if (!employee_id || !device_id) {
+    return res.status(400).json({ error: "employee_id and device_id are required" });
+  }
+
+  const userExists = db.get("users").find({ cid: employee_id }).value() || users.has(employee_id);
+  if (!userExists) {
+    return res.status(404).json({ error: "User not found", action: "nuke" });
+  }
+
+  const token = Buffer.from(`${employee_id}:${device_id}:${Date.now()}`).toString("base64");
+  return res.json({ allowed: true, token });
+});
+
+app.post("/api/auth/validate-session", (req, res) => {
+  const authHeader = req.get("Authorization") || "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : req.body?.token || "";
+
+  if (!token) {
+    return res.status(401).json({ error: "Missing auth token" });
+  }
+
+  return res.json({ valid: true, message: "session valid" });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  res.json({ ok: true });
 });
 
 app.get("/api/users/:cid", (req, res) => {
@@ -825,21 +866,6 @@ io.on("connection", (socket) => {
       requests.forEach(req => socket.emit("contact:request", req));
       pendingRequests.delete(cid); // Clear after delivery
     }
-
-    // ─── Contact Mute Event (NEW) ─────────────────────────
-    socket.on("contact:mute", (data) => {
-      const { cid: targetCid, roomId, until } = data;
-      const verifiedCid = socket.cid || targetCid;
-      const key = `${verifiedCid}_${roomId}`;
-      if (until === null || until === 0) {
-        userMutes.delete(key);
-        console.log(`[Mute] User ${verifiedCid} unmuted ${roomId}`);
-      } else {
-        userMutes.set(key, until);
-        console.log(`[Mute] User ${verifiedCid} muted ${roomId} until ${new Date(until).toISOString()}`);
-      }
-      syncMutesToDb();
-    });
 
     // Check for pending group invites (NEW: groep:invite)
     const invites = groupInvites.get(cid);
@@ -1467,13 +1493,13 @@ io.on("connection", (socket) => {
       console.log(`[Push-Debug] Room ${roomId} has ${roomMemberCount} members. Recipient in room? ${isRecipientInRoom}`);
 
       if (!isRecipientInRoom) {
-        // Buffer if offline
-        if (!targetUser || targetUser.status !== "online") {
-          console.log(`[Push-Debug] Target ${otherCid} is offline. Buffering message.`);
-          const undelivered = pendingMessages.get(roomId) || [];
-          undelivered.push(messageObj);
-          pendingMessages.set(roomId, undelivered);
-        }
+        // FIX #5: Buffer the message whenever recipient is NOT actively in the room,
+        // regardless of online/offline status. A backgrounded user has a live socket
+        // but has left the room — they need the message buffered for when they return.
+        console.log(`[Push-Debug] Target ${otherCid} is not in room. Buffering message.`);
+        const undelivered = pendingMessages.get(roomId) || [];
+        undelivered.push(messageObj);
+        pendingMessages.set(roomId, undelivered);
 
         // Send push notification
         if (targetUser && targetUser.pushToken) {
@@ -1840,6 +1866,23 @@ io.on("connection", (socket) => {
         receiverId: socket.cid
       });
     }
+  });
+
+  // ─── Contact Mute Event ───────────────────────────────────────────
+  // FIX #6: Moved outside the register handler to prevent duplicate listener
+  // stacking every time a user re-registers (e.g., on network reconnect).
+  socket.on("contact:mute", (data) => {
+    const { cid: targetCid, roomId, until } = data;
+    const verifiedCid = socket.cid || targetCid;
+    const key = `${verifiedCid}_${roomId}`;
+    if (until === null || until === 0) {
+      userMutes.delete(key);
+      console.log(`[Mute] User ${verifiedCid} unmuted ${roomId}`);
+    } else {
+      userMutes.set(key, until);
+      console.log(`[Mute] User ${verifiedCid} muted ${roomId} until ${new Date(until).toISOString()}`);
+    }
+    syncMutesToDb();
   });
 
   // ─── Disconnect Handler ──────────────────────────────

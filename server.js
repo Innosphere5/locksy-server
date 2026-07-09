@@ -346,7 +346,17 @@ import { readFileSync } from 'fs';
 
 // Initialize Firebase Admin with the provided service account
 try {
-  const serviceAccount = JSON.parse(readFileSync('./locksy-notification-firebase-adminsdk-fbsvc-b6249d695c.json', 'utf8'));
+  let serviceAccount;
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    } catch (parseError) {
+      throw new Error(`Failed to parse FIREBASE_SERVICE_ACCOUNT env variable as JSON: ${parseError.message}`);
+    }
+  } else {
+    serviceAccount = JSON.parse(readFileSync('./locksy-notification-firebase-adminsdk-fbsvc-b6249d695c.json', 'utf8'));
+  }
+
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
   });

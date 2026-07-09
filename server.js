@@ -22,7 +22,7 @@ dotenv.config();
 const adapter = new FileSync('db.json');
 const db = low(adapter);
 
-// Initialize DB defaults
+// Initialize DB defaults synchronously on startup
 db.defaults({
   users: [],
   chatRooms: [],
@@ -32,6 +32,28 @@ db.defaults({
   groupUnreadMessages: [],
   userMutes: {}
 }).write();
+
+// Override db.write for runtime writes to be asynchronous and debounced to prevent event loop blocks
+let dbWriteTimeout = null;
+let dbWritePendingData = null;
+
+const performAsyncDbWrite = () => {
+  if (dbWritePendingData) {
+    import('fs').then(fs => {
+      fs.writeFile('db.json', JSON.stringify(dbWritePendingData, null, 2), 'utf8', (err) => {
+        if (err) console.error('[DB-Async] Write failed:', err);
+      });
+    });
+    dbWritePendingData = null;
+  }
+};
+
+db.write = function() {
+  dbWritePendingData = db.getState();
+  if (dbWriteTimeout) clearTimeout(dbWriteTimeout);
+  dbWriteTimeout = setTimeout(performAsyncDbWrite, 1000);
+  return db;
+};
 
 const app = Express();
 const httpServer = createServer(app);
@@ -408,11 +430,24 @@ app.post("/api/auth/verify-user", (req, res) => {
     return res.status(400).json({ error: "employee_id and device_id are required" });
   }
 
-  const userExists = db.get("users").find({ cid: employee_id }).value() || users.has(employee_id);
-  if (!userExists) {
-    return res.status(404).json({ error: "User not found", action: "nuke" });
+  // Check in-memory map first (fast path), then fall back to persistent DB
+  const existingUser = users.get(employee_id) || db.get("users").find({ cid: employee_id }).value();
+
+  // If the user record exists, check for admin-level restrictions
+  if (existingUser) {
+    // Admin has explicitly disabled this user — hard block, wipe device
+    if (existingUser.disabled === true) {
+      return res.status(403).json({ allowed: false, error: "Account disabled", action: "nuke" });
+    }
+
+    // Device binding check: if a bound device exists and it doesn't match, reject
+    if (existingUser.boundDeviceId && existingUser.boundDeviceId !== device_id) {
+      return res.status(403).json({ allowed: false, error: "Device mismatch", action: "nuke" });
+    }
   }
 
+  // New user (no record yet) or existing user with a valid device — allow through.
+  // The user record is created/updated on the first Socket.IO "register" event.
   const token = Buffer.from(`${employee_id}:${device_id}:${Date.now()}`).toString("base64");
   return res.json({ allowed: true, token });
 });
@@ -1423,6 +1458,10 @@ io.on("connection", (socket) => {
         const isActive = memberUser && memberUser.socketId && activeSocketIds.has(memberUser.socketId);
 
         if (!isActive) {
+          // Emit directly to their socket if they are online but not in the room
+          if (memberUser && memberUser.socketId) {
+            io.to(memberUser.socketId).emit("message:received", messageObj);
+          }
           // Buffer it
           const userUnread = groupUnreadMessages.get(member.cid) || {};
           const groupMsgs = userUnread[groupId] || [];
@@ -1493,6 +1532,10 @@ io.on("connection", (socket) => {
       console.log(`[Push-Debug] Room ${roomId} has ${roomMemberCount} members. Recipient in room? ${isRecipientInRoom}`);
 
       if (!isRecipientInRoom) {
+        // Emit directly to their socket if they are online but not in the room
+        if (targetUser && targetUser.socketId) {
+          io.to(targetUser.socketId).emit("message:received", messageObj);
+        }
         // FIX #5: Buffer the message whenever recipient is NOT actively in the room,
         // regardless of online/offline status. A backgrounded user has a live socket
         // but has left the room — they need the message buffered for when they return.
@@ -1885,16 +1928,38 @@ io.on("connection", (socket) => {
     syncMutesToDb();
   });
 
+  // ─── Room Timer Event ─────────────────────────────────────────────
+  socket.on("room:timer:update", (data) => {
+    const { roomId, timerMs } = data;
+    const room = chatRooms.get(roomId);
+    const group = groups.get(roomId);
+
+    if (room) {
+      room.timer = timerMs;
+      syncChatRoomsToS3();
+      io.to(roomId).emit("room:timer:updated", { roomId, timerMs });
+    } else if (group) {
+      group.timer = timerMs;
+      syncGroupsToS3();
+      io.to(`group_${roomId}`).emit("room:timer:updated", { roomId, timerMs });
+    }
+  });
+
   // ─── Disconnect Handler ──────────────────────────────
   socket.on("disconnect", () => {
     const cid = userSockets.get(socket.id);
     if (cid) {
       const user = users.get(cid);
       if (user) {
-        user.status = "offline";
-        user.lastSeen = new Date().toISOString();
-        console.log(`[Disconnect] User ${cid} is now offline`);
-        io.emit("user:status", { cid, status: "offline" });
+        // ONLY mark offline if the disconnecting socket is the user's active socket!
+        if (user.socketId === socket.id) {
+          user.status = "offline";
+          user.lastSeen = new Date().toISOString();
+          console.log(`[Disconnect] User ${cid} is now offline`);
+          io.emit("user:status", { cid, status: "offline" });
+        } else {
+          console.log(`[Disconnect] Ignoring stale disconnect for user ${cid} (active: ${user.socketId}, disconnecting: ${socket.id})`);
+        }
       }
       userSockets.delete(socket.id);
 
@@ -1922,9 +1987,10 @@ io.on("connection", (socket) => {
     const group = groups.get(roomId);
 
     if (room) {
-      socket.emit("room:history", { roomId, messages: room.messages });
+      pendingMessages.delete(roomId);
+      socket.emit("room:history", { roomId, messages: room.messages, timer: room.timer || null });
     } else if (group) {
-      socket.emit("room:history", { roomId, messages: group.messages || [] });
+      socket.emit("room:history", { roomId, messages: group.messages || [], timer: group.timer || null });
     } else {
       socket.emit("room:error", { message: "History not found for this room/group" });
     }
@@ -1945,6 +2011,7 @@ io.on("connection", (socket) => {
     const { roomId } = data;
     if (chatRooms.has(roomId)) {
       socket.join(roomId);
+      pendingMessages.delete(roomId);
       socket.emit("room:joined", { success: true, roomId });
       console.log(`[Socket] Joined 1v1 room: ${roomId}`);
     } else if (groups.has(roomId)) {

@@ -343,6 +343,9 @@ testS3();
 
 import admin from 'firebase-admin';
 import { readFileSync } from 'fs';
+import { Expo } from 'expo-server-sdk';
+
+const expo = new Expo();
 
 // Initialize Firebase Admin with the provided service account
 try {
@@ -365,16 +368,50 @@ try {
   console.error('[Firebase] Failed to initialize Admin SDK:', error);
 }
 
+// ─── Expo Push Notification helper ──────────────────
+const sendExpoPushNotification = async (token, title, body, data = {}) => {
+  if (!Expo.isExpoPushToken(token)) {
+    console.error(`[Expo-Push] Token ${token} is not a valid Expo push token`);
+    return;
+  }
+
+  // Ensure all data payload fields are strings to avoid Expo protocol validation errors
+  const serializedData = {};
+  for (const key of Object.keys(data)) {
+    serializedData[key] = String(data[key]);
+  }
+
+  const messages = [{
+    to: token,
+    sound: 'default',
+    title: title,
+    body: body,
+    data: serializedData,
+  }];
+
+  try {
+    const chunks = expo.chunkPushNotifications(messages);
+    for (let chunk of chunks) {
+      const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+      console.log('[Expo-Push] Tickets successfully received:', ticketChunk);
+    }
+  } catch (error) {
+    console.error('[Expo-Push] Error sending via Expo Push API:', error);
+  }
+};
+
 // ─── Push Notification Helper ───────────────────────
 const sendPushNotification = async (token, title, body, data = {}) => {
   if (!token) return;
 
-  // We are migrating to raw FCM device tokens, but we gracefully skip old Expo tokens.
-  if (token.startsWith('ExponentPushToken') || token.startsWith('ExpoPushToken')) {
-    console.warn(`[Push] Skipping old Expo push token: ${token}. Please restart the client app to get an FCM token.`);
+  // If it is an Expo Push Token, use the Expo Push API
+  if (token.startsWith('ExponentPushToken') || token.startsWith('ExpoPushToken') || Expo.isExpoPushToken(token)) {
+    console.log(`[Push] Sending via Expo Push Service to: ${token.substring(0, 20)}...`);
+    await sendExpoPushNotification(token, title, body, data);
     return;
   }
 
+  // Otherwise, use raw FCM
   const message = {
     token: token,
     notification: {
@@ -491,6 +528,24 @@ app.get("/api/users/:cid", (req, res) => {
     status: user.status,
   });
 });
+
+// Helper to retrieve user data from memory or Lowdb persistent storage
+function getUserData(cid) {
+  if (!cid) return null;
+  const memoryUser = users.get(cid);
+  if (memoryUser) return memoryUser;
+
+  const dbUser = db.get("users").find({ cid }).value();
+  if (dbUser) {
+    return {
+      ...dbUser,
+      status: "offline",
+      socketId: null
+    };
+  }
+  return null;
+}
+
 
 app.get("/api/debug/users", (req, res) => {
   const allUsers = Array.from(users.values()).map(u => ({
@@ -939,6 +994,27 @@ io.on("connection", (socket) => {
     // Send the current list of groups to the client for reconciliation
     socket.emit("groep:list", userGroups);
 
+    // Collect and send the list of 1-on-1 contacts to the client
+    const userContacts = [];
+    chatRooms.forEach((room) => {
+      if (room.userA === cid || room.userB === cid) {
+        const otherCid = room.userA === cid ? room.userB : room.userA;
+        const otherUser = getUserData(otherCid);
+        if (otherUser) {
+          userContacts.push({
+            cid: otherUser.cid,
+            nickname: otherUser.nickname,
+            avatar: otherUser.avatar,
+            publicKey: otherUser.publicKey,
+            status: otherUser.status || "offline",
+            verified: true,
+            roomId: room.roomId
+          });
+        }
+      }
+    });
+    socket.emit("contact:list", userContacts);
+
     // Deliver pending messages for all rooms this user is in
     chatRooms.forEach((room, roomId) => {
       if (room.userA === cid || room.userB === cid) {
@@ -976,7 +1052,7 @@ io.on("connection", (socket) => {
   // ─── Search Contact (Discovery Only) ──────────────────
   socket.on("search:cid", (data) => {
     const { otherCid } = data;
-    const otherUser = users.get(otherCid);
+    const otherUser = getUserData(otherCid);
 
     if (!otherUser) {
       return socket.emit("search:error", { message: "User not found" });
@@ -987,7 +1063,7 @@ io.on("connection", (socket) => {
         cid: otherUser.cid,
         nickname: otherUser.nickname,
         avatar: otherUser.avatar,
-        status: otherUser.status,
+        status: otherUser.status || "offline",
         publicKey: otherUser.publicKey,
       }
     });
@@ -995,7 +1071,13 @@ io.on("connection", (socket) => {
 
   socket.on("search:nickname", (data) => {
     const { nickname } = data;
-    const foundUser = Array.from(users.values()).find(u => u.nickname.toLowerCase() === nickname.toLowerCase());
+    let foundUser = Array.from(users.values()).find(u => u.nickname && u.nickname.toLowerCase() === nickname.toLowerCase());
+    if (!foundUser) {
+      const dbUser = db.get("users").find(u => u.nickname && u.nickname.toLowerCase() === nickname.toLowerCase()).value();
+      if (dbUser) {
+        foundUser = { ...dbUser, status: "offline" };
+      }
+    }
 
     if (!foundUser) {
       return socket.emit("search:error", { message: "User not found" });
@@ -1006,7 +1088,7 @@ io.on("connection", (socket) => {
         cid: foundUser.cid,
         nickname: foundUser.nickname,
         avatar: foundUser.avatar,
-        status: foundUser.status,
+        status: foundUser.status || "offline",
         publicKey: foundUser.publicKey,
       }
     });
@@ -1015,8 +1097,8 @@ io.on("connection", (socket) => {
   // ─── Connection Request ───────────────────────────────
   socket.on("contact:request:send", (data) => {
     const { fromCid, toCid } = data;
-    const fromUser = users.get(fromCid);
-    const toUser = users.get(toCid);
+    const fromUser = getUserData(fromCid);
+    const toUser = getUserData(toCid);
 
     if (!toUser) return socket.emit("contact:request:error", { message: "Target user not found" });
 
@@ -1043,8 +1125,8 @@ io.on("connection", (socket) => {
   // ─── Accept Connection Request ────────────────────────
   socket.on("contact:request:accept", (data) => {
     const { fromCid, toCid } = data; // fromCid is the requester, toCid is the accepter
-    const requester = users.get(fromCid);
-    const accepter = users.get(toCid);
+    const requester = getUserData(fromCid);
+    const accepter = getUserData(toCid);
 
     if (!requester || !accepter) return;
 
@@ -1088,8 +1170,8 @@ io.on("connection", (socket) => {
   // ─── Direct Add Connection (QR Code bypass) ─────────
   socket.on("contact:add_direct", (data) => {
     const { fromCid, toCid } = data;
-    const requester = users.get(fromCid);
-    const accepter = users.get(toCid);
+    const requester = getUserData(fromCid);
+    const accepter = getUserData(toCid);
 
     if (!requester || !accepter) return;
 
@@ -1503,12 +1585,48 @@ io.on("connection", (socket) => {
       });
 
     } else if (roomId) {
-      const room = chatRooms.get(roomId);
-      if (!room) return;
+      let room = chatRooms.get(roomId);
+      if (!room) {
+        // Dynamic room creation/recovery for 1v1 room
+        let userA = null;
+        let userB = null;
+        if (typeof roomId === 'string' && roomId.startsWith("room_")) {
+          const parts = roomId.replace("room_", "").split("_");
+          if (parts.length === 2) {
+            userA = parts[0];
+            userB = parts[1];
+          }
+        }
+        if (!userA && data.receiverCid) {
+          userA = verifiedSenderCid;
+          userB = data.receiverCid;
+        }
+        if (userA && userB) {
+          const canonicalId = generateRoomId(userA, userB);
+          room = chatRooms.get(canonicalId);
+          if (!room) {
+            room = {
+              roomId: canonicalId,
+              userA,
+              userB,
+              createdAt: new Date().toISOString(),
+              messages: [],
+              status: "active",
+            };
+            chatRooms.set(canonicalId, room);
+            syncChatRoomsToS3();
+            console.log(`[Send-Recovery] Dynamically created 1v1 room ${canonicalId} for message sending`);
+          }
+          socket.join(canonicalId);
+        } else {
+          console.warn(`[Send] Unable to recover room for roomId: ${roomId}`);
+          return;
+        }
+      }
 
       const messageObj = {
         id: data.id || uuidv4(),
-        roomId,
+        roomId: room.roomId,
         senderCid: verifiedSenderCid,
         senderNickname: senderNickname || `User-${verifiedSenderCid.substring(0, 4)}`,
         senderAvatar: data.senderAvatar || null,
@@ -1522,44 +1640,54 @@ io.on("connection", (socket) => {
       syncChatRoomsToS3();
 
       // 1. ACK to sender
-      socket.emit("message:sent", { id: messageObj.id, tempId: data.id, roomId });
+      socket.emit("message:sent", { id: messageObj.id, tempId: data.id, roomId: room.roomId });
 
       // 2. Broadcast to room
-      io.to(roomId).emit("message:received", messageObj);
+      io.to(room.roomId).emit("message:received", messageObj);
 
       // Buffer for offline members in 1v1
       const otherCid = room.userA === verifiedSenderCid ? room.userB : room.userA;
-      const targetUser = users.get(otherCid);
+      let targetUser = users.get(otherCid) || getUserData(otherCid);
 
-      console.log(`[Push-Debug] Processing message in ${roomId}`);
+      console.log(`[Push-Debug] Processing message in ${room.roomId}`);
       console.log(`[Push-Debug] Sender: ${verifiedSenderCid}, Target: ${otherCid}`);
 
-      // If recipient is not actively in the socket room, send a push notification
-      const roomMembers = io.sockets.adapter.rooms.get(roomId);
+      // Resolve live socket ID for recipient if stale
+      if (targetUser) {
+        if (!targetUser.socketId || !io.sockets.sockets.has(targetUser.socketId)) {
+          for (const [sockId, cid] of userSockets.entries()) {
+            if (cid === otherCid && io.sockets.sockets.has(sockId)) {
+              targetUser.socketId = sockId;
+              break;
+            }
+          }
+        }
+      }
+
+      // If recipient is not actively in the socket room, send direct socket payload or push notification
+      const roomMembers = io.sockets.adapter.rooms.get(room.roomId);
       const roomMemberCount = roomMembers ? roomMembers.size : 0;
       const isRecipientInRoom = targetUser && targetUser.socketId && roomMembers && roomMembers.has(targetUser.socketId);
 
-      console.log(`[Push-Debug] Room ${roomId} has ${roomMemberCount} members. Recipient in room? ${isRecipientInRoom}`);
+      console.log(`[Push-Debug] Room ${room.roomId} has ${roomMemberCount} members. Recipient in room? ${isRecipientInRoom}`);
 
       if (!isRecipientInRoom) {
         // Emit directly to their socket if they are online but not in the room
         if (targetUser && targetUser.socketId) {
           io.to(targetUser.socketId).emit("message:received", messageObj);
         }
-        // FIX #5: Buffer the message whenever recipient is NOT actively in the room,
-        // regardless of online/offline status. A backgrounded user has a live socket
-        // but has left the room — they need the message buffered for when they return.
+        // Buffer the message whenever recipient is NOT actively in the room
         console.log(`[Push-Debug] Target ${otherCid} is not in room. Buffering message.`);
-        const undelivered = pendingMessages.get(roomId) || [];
+        const undelivered = pendingMessages.get(room.roomId) || [];
         undelivered.push(messageObj);
-        pendingMessages.set(roomId, undelivered);
+        pendingMessages.set(room.roomId, undelivered);
 
         // Send push notification
         if (targetUser && targetUser.pushToken) {
-          const targetMuteKey = `${otherCid}_${roomId}`;
+          const targetMuteKey = `${otherCid}_${room.roomId}`;
           const muteUntil = userMutes.get(targetMuteKey);
           if (muteUntil && muteUntil > Date.now()) {
-            console.log(`[Push-Debug] Target ${otherCid} has muted room ${roomId}. Skipping push.`);
+            console.log(`[Push-Debug] Target ${otherCid} has muted room ${room.roomId}. Skipping push.`);
           } else {
             console.log(`[Push-Debug] Triggering push to ${otherCid} (Token: ${targetUser.pushToken.substring(0, 10)}...)`);
             const bodyPreview = typeof message === 'string' ? message : (message.text || "Sent an attachment");
@@ -1567,16 +1695,13 @@ io.on("connection", (socket) => {
               targetUser.pushToken,
               senderNickname || "Locksy",
               bodyPreview,
-              { roomId: String(roomId), senderCid: String(verifiedSenderCid), type: 'message' }
+              { roomId: String(room.roomId), senderCid: String(verifiedSenderCid), type: 'message' }
             );
           }
         } else {
           console.log(`[Push-Debug] Cannot send push to ${otherCid}: ${!targetUser ? 'User not found' : 'No pushToken'}`);
         }
       }
-
-
-
     }
   });
 
@@ -1769,6 +1894,25 @@ io.on("connection", (socket) => {
   });
 
   // ─── Call Signaling (WebRTC + Push) ────────────────
+
+  // Helper: Resolve live socket for a CID (handles stale socket IDs after reconnect)
+  const resolveUserSocket = (cid) => {
+    const user = users.get(cid);
+    if (!user) return null;
+    // If stored socketId is still alive, use it
+    if (user.socketId && io.sockets.sockets.has(user.socketId)) {
+      return user.socketId;
+    }
+    // Scan userSockets for a live mapping
+    for (const [sockId, mappedCid] of userSockets.entries()) {
+      if (mappedCid === cid && io.sockets.sockets.has(sockId)) {
+        user.socketId = sockId; // update stale reference
+        return sockId;
+      }
+    }
+    return null;
+  };
+
   socket.on("call:offer", (data) => {
     const { callId, receiverId, offerSDP, callType, callerName } = data;
     const callerId = socket.cid || data.callerId;
@@ -1807,8 +1951,9 @@ io.on("connection", (socket) => {
     });
 
     // 3. Forward offer via Socket (Real-time foreground)
-    if (targetUser.socketId && targetUser.socketId !== socket.id) {
-      io.to(targetUser.socketId).emit("call:offer", {
+    const targetSocketId = resolveUserSocket(receiverId);
+    if (targetSocketId && targetSocketId !== socket.id) {
+      io.to(targetSocketId).emit("call:offer", {
         callId,
         callerId,
         callerName,
@@ -1836,16 +1981,15 @@ io.on("connection", (socket) => {
 
   socket.on("call:ringing", (data) => {
     const { callId, callerId } = data;
-    const targetUser = users.get(callerId);
-    if (targetUser && targetUser.socketId) {
-      io.to(targetUser.socketId).emit("call:ringing", { callId });
+    const targetSocketId = resolveUserSocket(callerId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("call:ringing", { callId });
     }
   });
 
   socket.on("call:answer", (data) => {
     const { callId, callerId, answerSDP } = data;
     const receiverId = socket.cid;
-    const targetUser = users.get(callerId);
 
     console.log(`[Call] Answer from ${receiverId} to ${callerId}`);
 
@@ -1854,8 +1998,9 @@ io.on("connection", (socket) => {
       call.status = 'connected';
     }
 
-    if (targetUser && targetUser.socketId) {
-      io.to(targetUser.socketId).emit("call:answer", {
+    const targetSocketId = resolveUserSocket(callerId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("call:answer", {
         callId,
         receiverId,
         answerSDP
@@ -1865,10 +2010,10 @@ io.on("connection", (socket) => {
 
   socket.on("call:ice-candidate", (data) => {
     const { callId, receiverId, candidate } = data;
-    const targetUser = users.get(receiverId);
+    const targetSocketId = resolveUserSocket(receiverId);
 
-    if (targetUser && targetUser.socketId) {
-      io.to(targetUser.socketId).emit("call:ice-candidate", {
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("call:ice-candidate", {
         callId,
         senderId: socket.cid,
         candidate
@@ -1878,14 +2023,14 @@ io.on("connection", (socket) => {
 
   socket.on("call:reject", (data) => {
     const { callId, callerId, reason } = data;
-    const targetUser = users.get(callerId);
 
     console.log(`[Call] Rejected by ${socket.cid} (Reason: ${reason})`);
 
     activeCalls.delete(callId);
 
-    if (targetUser && targetUser.socketId) {
-      io.to(targetUser.socketId).emit("call:rejected", {
+    const targetSocketId = resolveUserSocket(callerId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("call:rejected", {
         callId,
         receiverId: socket.cid,
         reason
@@ -1895,14 +2040,14 @@ io.on("connection", (socket) => {
 
   socket.on("call:end", (data) => {
     const { callId, otherId } = data;
-    const targetUser = users.get(otherId);
 
     console.log(`[Call] Ended by ${socket.cid} for ${callId}`);
 
     activeCalls.delete(callId);
 
-    if (targetUser && targetUser.socketId) {
-      io.to(targetUser.socketId).emit("call:ended", {
+    const targetSocketId = resolveUserSocket(otherId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("call:ended", {
         callId,
         senderId: socket.cid
       });
@@ -1911,10 +2056,10 @@ io.on("connection", (socket) => {
 
   socket.on("call:busy", (data) => {
     const { callId, callerId } = data;
-    const targetUser = users.get(callerId);
+    const targetSocketId = resolveUserSocket(callerId);
 
-    if (targetUser && targetUser.socketId) {
-      io.to(targetUser.socketId).emit("call:busy", {
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("call:busy", {
         callId,
         receiverId: socket.cid
       });

@@ -1,5 +1,8 @@
 .env
+.env.local
 node_modules
 serviceAccountKey.json
-.env.example
-locksy-notification-firebase-adminsdk-fbsvc-b6249d695c.json
+*.json
+!.env.example
+!package.json
+!package-lock.json

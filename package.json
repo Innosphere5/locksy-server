@@ -15,11 +15,14 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1041.0",
     "@aws-sdk/s3-request-presigner": "^3.1041.0",
+    "@supabase/supabase-js": "^2.110.8",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "expo-server-sdk": "^6.1.0",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.1",
     "firebase-admin": "^13.10.0",
+    "jsonwebtoken": "^9.0.3",
     "lowdb": "^1.0.0",
     "socket.io": "^4.8.3",
     "uuid": "^14.0.0"
